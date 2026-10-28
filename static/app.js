@@ -20,6 +20,7 @@ const S = {
   people: [], selectedPerson: -1, selectedPoint: 0,
   width: 0, height: 0, dirty: false, revision: 0,
   navigating: false, pendingIndex: null, busy: false,
+  batch: false, batchStop: false,
   zoom: 1, baseScale: 1, filter: 'all',
   showSkeleton: true, showNumbers: false, placeMode: false,
   undo: [], redo: [], dragging: null, savePromise: null, importing: false,
@@ -37,7 +38,10 @@ async function api(url, options={}) {
   const response = await fetch(url, options);
   let result = {};
   try {result = await response.json()} catch (e) { /* handle non-JSON errors */ }
-  if (!response.ok) throw new Error(result.error || `Server error (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(result.error || `Server error (${response.status})`);
+    error.status = response.status; throw error;
+  }
   return result;
 }
 function jsonOptions(method, data) {return {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}}
@@ -59,6 +63,9 @@ function showSaveStatus(saving=false) {
 }
 function updateButtons() {
   const has=S.index>=0 && !!frame();
+  el('batchAutoBtn').disabled=!has || S.busy || S.importing || S.navigating || !S.frames.some(f=>f.status==='unlabeled');
+  for(const id of ['newProjectBtn','openFolderSmall','modelSelect','pointThreshold']) el(id).disabled=S.busy;
+  document.querySelector('.right-scroll').inert=S.batch;
   for (const id of ['saveBtn','addPersonBtn','inspectorAddBtn','autoBtn','zoomIn','zoomOut','zoomReset']) el(id).disabled=!has || S.busy || S.importing;
   for (const id of ['prevBtn','footPrev']) el(id).disabled=!has || S.index===0 || S.busy;
   for (const id of ['nextBtn','footNext']) el(id).disabled=!has || S.index>=S.frames.length-1 || S.busy;
@@ -87,12 +94,12 @@ function renderVirtualRows() {
     const button=document.createElement('button');
     button.className='frame-row'+(i===S.index?' active':'');
     button.dataset.index=String(i);
-    button.title=f.name;
+    button.title=f.name+(f.auto_note?' — '+f.auto_note:'');
     const num=document.createElement('span');num.className='frame-number';num.textContent=String(i+1).padStart(3,'0');
     const text=document.createElement('span');text.className='frame-info';
     const label=document.createElement('span');label.className='frame-name';label.textContent=f.name;
     const sub=document.createElement('span');sub.className='frame-sub';
-    sub.textContent=f.status==='unlabeled'?'Not annotated':f.status==='reviewed_empty'?'Reviewed · no people':`${f.people} ${f.people===1?'person':'people'} labeled`;
+    sub.textContent=f.status==='unlabeled'?(f.auto_note||'Not annotated'):f.status==='reviewed_empty'?'Reviewed · no people':`${f.people} ${f.people===1?'person':'people'} labeled`;
     text.append(label,sub);
     const dot=document.createElement('span');dot.className='frame-status '+f.status;
     button.append(num,text,dot);fragment.append(button);
@@ -102,6 +109,7 @@ function renderVirtualRows() {
 }
 function renderFrameList(resetScroll=false) {
   el('frameCount').textContent=S.frames.length.toLocaleString();
+  el('unlabeledCount').textContent=S.frames.filter(f=>f.status==='unlabeled').length.toLocaleString();
   const search=el('frameSearch').value.toLowerCase().trim();
   S.visibleRows=S.frames.map((f,i)=>({f,i})).filter(({f})=>{
     if(search && !f.name.toLowerCase().includes(search))return false;
@@ -165,7 +173,7 @@ async function saveFrame(force=false) {
   const promise=(async()=>{
     showSaveStatus(true);
     const result=await api(annUrl(f.name),jsonOptions('PUT',payload));
-    f.status=result.status;f.people=result.people;
+    f.status=result.status;f.people=result.people;f.auto_note='';
     if (revision===S.revision) S.dirty=false;
     renderFrameList();showSaveStatus();
   })();
@@ -199,6 +207,7 @@ async function navigateTo(index) {
     renderFrameList();scrollActiveIntoView();renderHeader();renderPeople();fitSurface();renderOverlay();showSaveStatus();
   }catch(e){toast(e.message,true)}finally{
     S.navigating=false;
+    updateButtons();
     const pending=S.pendingIndex;S.pendingIndex=null;
     if(pending!==null && pending!==S.index) requestNavigation(pending);
   }
@@ -349,6 +358,18 @@ function mouseDown(evt) {
     S.placeMode=false;setDirty();renderOverlay();renderPoints();renderHeader();
   }
 }
+function hidePointOnRightClick(evt) {
+  const circle=evt.target.closest('circle[data-point]');
+  if(!circle)return;
+  evt.preventDefault();
+  if(S.busy||S.navigating||S.dragging||S.index<0)return;
+  const pi=Number(circle.dataset.person),ki=Number(circle.dataset.point);
+  if(!S.people[pi]?.keypoints[ki])return;
+  snapshotUndo();
+  S.selectedPerson=pi;S.selectedPoint=ki;S.placeMode=false;
+  S.people[pi].keypoints[ki]=[0,0,0];
+  setDirty();renderPeople();renderOverlay();renderHeader();
+}
 function mouseMove(evt) {
   if(!S.dragging)return;
   const point=pointAtEvent(evt);if(!point)return;
@@ -382,7 +403,64 @@ async function predictPose() {
     S.busy=false;el('busyOverlay').classList.add('hidden');updateButtons();
   }
 }
-function openModal() {if(S.importing)return;el('importModal').classList.remove('hidden');el('importError').classList.add('hidden')}
+function showUnlabeled() {
+  S.filter='unlabeled';el('frameSearch').value='';
+  document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='unlabeled'));
+  renderFrameList(true);
+}
+async function runAutomaticLabels() {
+  if(S.busy||S.importing||S.navigating||!frame())return;
+  S.batch=true;S.batchStop=false;S.busy=true;S.pendingIndex=null;
+  const currentIndex=S.index;
+  const settings={folder:S.folder,model:el('modelSelect').value,confidence:0.25,keypoint_confidence:Number(el('pointThreshold').value)};
+  let completed=0,labeled=0,failed=0,consecutiveErrors=0,total=0;
+  el('batchStopBtn').classList.remove('hidden');el('batchStopBtn').disabled=false;
+  el('batchStopBtn').textContent='Stop after current frame';
+  el('batchProgress').classList.remove('hidden');el('batchProgress').value=0;
+  el('busyOverlay').classList.remove('hidden');el('busyTitle').textContent='Automatic labeling';
+  updateButtons();
+  try {
+    await saveFrame();
+    const queue=S.frames.filter(f=>f.status==='unlabeled');total=queue.length;
+    el('batchProgress').max=Math.max(1,total);
+    for(const f of queue){
+      if(S.batchStop)break;
+      const progress=`${completed} / ${total} processed · ${labeled} labeled · ${failed} errors`;
+      el('batchStatus').textContent=progress;
+      el('busySubtitle').textContent=`${progress}. Processing ${f.name}. First use may download the model.`;
+      try {
+        const result=await api('/api/auto-label/'+encodeURIComponent(f.name),jsonOptions('POST',settings));
+        if(!result.skipped){
+          f.status=result.status;f.people=result.people.length;f.auto_note=result.auto_note;
+          if(result.status==='labeled')labeled++;
+        }
+        consecutiveErrors=0;
+      } catch(e){
+        failed++;consecutiveErrors++;f.auto_note=e.message;
+        // Stop on connection/setup/project failures; do not repeat them for an entire dataset.
+        if(!e.status || [400,409,503].includes(e.status) || consecutiveErrors>=3)throw e;
+      }
+      completed++;el('batchProgress').value=completed;renderFrameList();
+    }
+    el('batchStatus').textContent=`${S.batchStop?'Stopped':'Finished'} · ${completed} / ${total} processed · ${labeled} labeled · ${failed} errors`;
+  } catch(e){
+    el('batchStatus').textContent=`Stopped · ${completed} / ${total} processed. ${e.message}`;
+    toast(e.message,true);
+  } finally {
+    S.batch=false;S.busy=false;el('batchStopBtn').classList.add('hidden');
+    el('busyOverlay').classList.add('hidden');
+    try {
+      const result=await api('/api/project');
+      if(result.folder!==S.folder || result.mode!==S.mode)await adoptProject(result);
+      else {
+        S.frames=result.frames;S.index=-1;
+        await navigateTo(Math.min(currentIndex,S.frames.length-1));
+      }
+    }catch(e){toast('Could not refresh saved results: '+e.message,true)}
+    showUnlabeled();updateButtons();
+  }
+}
+function openModal() {if(S.importing||S.busy)return;el('importModal').classList.remove('hidden');el('importError').classList.add('hidden')}
 function closeModal() {if(S.importing)return;el('importModal').classList.add('hidden')}
 function importError(error) {el('importError').classList.remove('hidden');el('importError').textContent=error.message||String(error)}
 function confirmReplace() {return !S.frames.length || confirm('Open a different dataset? This replaces the current working project and its CSV. Export the CSV first if you need to keep it.')}
@@ -466,6 +544,11 @@ function wireEvents() {
   ['addPersonBtn','inspectorAddBtn'].forEach(id=>el(id).addEventListener('click',createSkeleton));
   el('deletePersonBtn').addEventListener('click',removeSelectedPerson);
   el('autoBtn').addEventListener('click',predictPose);
+  el('batchAutoBtn').addEventListener('click',runAutomaticLabels);
+  el('reviewUnlabeledBtn').addEventListener('click',showUnlabeled);
+  el('batchStopBtn').addEventListener('click',()=>{
+    S.batchStop=true;el('batchStopBtn').disabled=true;el('batchStopBtn').textContent='Stopping after this frame…';
+  });
   el('undoBtn').addEventListener('click',()=>restoreSnapshot(S.undo,S.redo));
   el('redoBtn').addEventListener('click',()=>restoreSnapshot(S.redo,S.undo));
   el('peopleTabs').addEventListener('click',evt=>{
@@ -505,6 +588,7 @@ function wireEvents() {
   el('showNumbers').addEventListener('change',evt=>{S.showNumbers=evt.target.checked;renderOverlay()});
   el('pointThreshold').addEventListener('input',evt=>{el('thresholdValue').textContent=Number(evt.target.value).toFixed(2)});
   el('poseOverlay').addEventListener('pointerdown',mouseDown);
+  el('poseOverlay').addEventListener('contextmenu',hidePointOnRightClick);
   el('poseOverlay').addEventListener('pointermove',mouseMove);
   el('poseOverlay').addEventListener('pointerup',mouseUp);
   el('poseOverlay').addEventListener('pointercancel',mouseUp);
@@ -519,6 +603,7 @@ function wireEvents() {
   document.addEventListener('keydown',async evt=>{
     const ctrl=evt.ctrlKey||evt.metaKey;
     if(ctrl && evt.key.toLowerCase()==='s'){
+      if(S.batch){evt.preventDefault();return;}
       evt.preventDefault();try{await saveFrame(true);toast('Saved annotations to CSV.')}catch(e){toast(e.message,true)}return;
     }
     if(ctrl && evt.key.toLowerCase()==='z'){
@@ -533,7 +618,7 @@ function wireEvents() {
     if(evt.key==='ArrowRight'){evt.preventDefault();requestNavigation((S.pendingIndex??S.index)+1)}
     if(evt.key==='/' && !evt.ctrlKey){evt.preventDefault();el('frameSearch').focus()}
   });
-  window.addEventListener('beforeunload',evt=>{if(S.dirty){evt.preventDefault();evt.returnValue='';}});
+  window.addEventListener('beforeunload',evt=>{if(S.dirty||S.batch){evt.preventDefault();evt.returnValue='';}});
 }
 
 wireEvents();

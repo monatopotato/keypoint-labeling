@@ -28,6 +28,13 @@
         <div class="pane-top"><div><div class="eyebrow">DATASET</div><h2>Frames <span id="frameCount" class="muted-number">0</span></h2></div><button id="openFolderSmall" class="icon-button" title="Open a folder">＋</button></div>
         <div class="search-wrap"><span class="search-icon">⌕</span><input id="frameSearch" type="search" placeholder="Search frame names..." autocomplete="off" aria-label="Search frame names"/><span class="search-hint">/</span></div>
         <div class="filter-tabs" role="group" aria-label="Filter frames"><button data-filter="all" class="active">All</button><button data-filter="unlabeled">Unlabeled</button><button data-filter="labeled">Done</button></div>
+        <section class="batch-panel" aria-label="Automatic labeling">
+          <button id="batchAutoBtn" class="btn btn-glow full-width">✦ Auto-label unlabeled frames</button>
+          <button id="batchStopBtn" class="btn btn-quiet full-width hidden">Stop after current frame</button>
+          <p id="batchStatus" role="status" aria-live="polite">Saves each frame. Keep this tab open during the run.</p>
+          <progress id="batchProgress" class="hidden" max="1" value="0" aria-label="Automatic labeling progress"></progress>
+          <button id="reviewUnlabeledBtn" class="subtle-link">Unlabeled · <span id="unlabeledCount">0</span> to review</button>
+        </section>
         <div class="frame-list" id="frameList" aria-label="Frame browser"></div>
         <div class="dataset-footer"><div class="footer-label"><span>LABELING PROGRESS</span><span id="progressText">0 / 0</span></div><div class="progress-track"><div id="progressFill"></div></div><p>Annotations save as you move between frames.</p></div>
       </aside>
@@ -41,7 +48,7 @@
           <div class="empty-stage" id="emptyStage"><div class="empty-art"><div class="empty-art-inner"><svg viewBox="0 0 160 155" fill="none" aria-hidden="true"><path d="M30 40 80 11l50 29v71l-50 28-50-28V40Z" stroke="#3c666c" stroke-width="2" stroke-dasharray="6 7"/><circle cx="80" cy="34" r="9" stroke="#65cfc5" stroke-width="3"/><path d="M80 45v47M80 59l-28 21m28-21 28 21M80 92l-19 28m19-28 19 28" stroke="#65cfc5" stroke-linecap="round" stroke-width="4"/><circle cx="52" cy="80" r="5" fill="#65cfc5"/><circle cx="108" cy="80" r="5" fill="#65cfc5"/><circle cx="61" cy="120" r="5" fill="#65cfc5"/><circle cx="99" cy="120" r="5" fill="#65cfc5"/></svg></div></div><div class="empty-eyebrow">YOUR LABELING WORKSPACE</div><h2>Every frame. Every keypoint.</h2><p>Import a folder of video frames to start annotating with 17-point COCO human poses.</p><button id="emptyImportBtn" class="btn btn-primary btn-large">＋ &nbsp; Choose image folder</button><div class="empty-support">JPG · PNG · WEBP · BMP &nbsp; / &nbsp; Autosave on navigation</div></div>
           <div id="surface" class="image-surface hidden"><img id="frameImage" alt="Current video frame" draggable="false" /><svg id="poseOverlay" xmlns="http://www.w3.org/2000/svg" aria-label="Draggable human pose keypoint overlay"></svg></div>
           <div class="stage-busy hidden" id="busyOverlay"><div class="loader-circle"></div><strong id="busyTitle">Running pose estimation</strong><p id="busySubtitle">Preparing YOLO model...</p></div>
-          <div class="stage-hint" id="stageHint">Drag points to adjust &nbsp;·&nbsp; Click a point to select</div>
+          <div class="stage-hint" id="stageHint">Drag to adjust &nbsp;·&nbsp; Right-click a point to hide &nbsp;·&nbsp; Ctrl+Z to undo</div>
         </div>
         <div class="canvas-footer"><div class="foot-left"><div class="stepper"><button id="footPrev" title="Previous frame">‹</button><span id="footCounter">0 <span>/</span> 0</span><button id="footNext" title="Next frame">›</button></div><input type="range" id="frameRange" min="0" max="0" value="0" aria-label="Jump to frame"/><span id="timelineTime" class="timeline-time">—</span></div><div class="foot-right"><button class="zoom-button" id="zoomOut" title="Zoom out">−</button><button class="zoom-display" id="zoomReset" title="Fit image to screen">Fit <span id="zoomText">100%</span></button><button class="zoom-button" id="zoomIn" title="Zoom in">＋</button></div></div>
         <div class="shortcut-strip"><div><span class="shortcut-dot"></span> COCO 17-POINT SKELETON <span class="shortcut-muted">• 19 connections</span></div><div class="shortcut-items"><span><kbd>←</kbd><kbd>→</kbd> Navigate</span><span><kbd>Ctrl</kbd><kbd>S</kbd> Save</span><span><kbd>Ctrl</kbd><kbd>Z</kbd> Undo</span></div></div>

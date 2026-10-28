@@ -10,11 +10,12 @@ from pathlib import Path
 # Set a fresh location before the application's module-level constants are defined.
 _TEST_TMP = tempfile.TemporaryDirectory()
 os.environ["POSEFRAME_DATA"] = _TEST_TMP.name
-from app import app, filename_sort_key, KEYPOINTS, CSV_FIELDS  # noqa: E402
+from app import app, filename_sort_key, KEYPOINTS, CSV_FIELDS, PROJECT_FILE  # noqa: E402
 
 
 class PoseFrameTests(unittest.TestCase):
     def setUp(self):
+        PROJECT_FILE.unlink(missing_ok=True)
         self.client=app.test_client()
         self.folder=Path(_TEST_TMP.name)/'test_photos'
         self.folder.mkdir(exist_ok=True)
@@ -83,6 +84,7 @@ class PoseFrameTests(unittest.TestCase):
 
     def test_predict_converts_confidence_to_visibility(self):
         result = Mock()
+        result.orig_shape = (480, 640)
         result.keypoints.data.cpu.return_value.tolist.return_value = [
             [[10, 20, 0.9], [30, 40, 0.2]] + [[50, 60, 0.8] for _ in range(15)]
         ]
@@ -95,6 +97,60 @@ class PoseFrameTests(unittest.TestCase):
         self.assertEqual(len(points), 17)
         self.assertEqual(points[0], [10, 20, 2])
         self.assertEqual(points[1], [0, 0, 0])
+
+    def auto_label(self):
+        return self.client.post('/api/auto-label/2026-10-21-12-30-01-000.jpg',
+                                json={'folder': str(self.folder)})
+
+    def test_automatic_run_saves_coordinates_and_skips_existing_work(self):
+        prediction = {'people': [{'source': 'yolo26', 'keypoints': [[10, 20, 2]] * 17}],
+                      'width': 640, 'height': 480}
+        with patch('app.predict', return_value=prediction) as infer:
+            response = self.auto_label()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json['status'], 'labeled')
+            self.assertTrue(self.auto_label().json['skipped'])
+            self.assertEqual(infer.call_count, 1)
+        saved = self.client.get('/api/annotations/2026-10-21-12-30-01-000.jpg').json
+        self.assertEqual(saved['people'][0]['keypoints'][0], [10, 20, 2])
+        with self.client.get('/api/export') as exported:
+            rows = list(csv.DictReader(io.StringIO(exported.data.decode('utf-8'))))
+        self.assertEqual(rows[0]['nose_x'], '10.0')
+        self.assertEqual(rows[0]['source'], 'yolo26')
+
+    def test_automatic_empty_or_zero_confidence_stays_unlabeled(self):
+        for people in ([], [{'keypoints': [[0, 0, 0]] * 17}]):
+            with patch('app.predict', return_value={'people': people, 'width': 640, 'height': 480}):
+                response = self.auto_label()
+            self.assertEqual(response.json['status'], 'unlabeled')
+            self.assertEqual(response.json['people'], [])
+            frame = self.client.get('/api/project').json['frames'][0]
+            self.assertEqual(frame['auto_note'], 'No confident keypoints detected')
+
+    def test_automatic_error_is_saved_for_review(self):
+        with patch('app.predict', return_value=({'error': 'Cannot read image'}, 500)):
+            self.assertEqual(self.auto_label().status_code, 500)
+        frame = self.client.get('/api/project').json['frames'][0]
+        self.assertEqual(frame['status'], 'unlabeled')
+        self.assertEqual(frame['auto_note'], 'Cannot read image')
+
+    def test_automatic_run_preserves_reviewed_empty_frames(self):
+        self.client.put('/api/annotations/2026-10-21-12-30-01-000.jpg',
+                        json={'width': 640, 'height': 480, 'people': []})
+        with patch('app.predict') as infer:
+            self.assertTrue(self.auto_label().json['skipped'])
+            infer.assert_not_called()
+
+    def test_automatic_run_rejects_changed_project_and_concurrent_edits(self):
+        response = self.client.post('/api/auto-label/2026-10-21-12-30-01-000.jpg', json={'folder': 'other'})
+        self.assertEqual(response.status_code, 409)
+        def concurrent_edit(_):
+            self.client.put('/api/annotations/2026-10-21-12-30-01-000.jpg',
+                            json={'width': 640, 'height': 480, 'people': []})
+            return {'people': [], 'width': 640, 'height': 480}
+        with patch('app.predict', side_effect=concurrent_edit):
+            self.assertEqual(self.auto_label().status_code, 409)
+        self.assertEqual(self.client.get('/api/project').json['frames'][0]['status'], 'reviewed_empty')
 
 
 if __name__=='__main__': unittest.main()

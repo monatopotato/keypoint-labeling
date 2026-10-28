@@ -156,6 +156,7 @@ def snapshot(project: dict[str, Any]) -> dict[str, Any]:
                 "name": name,
                 "status": (project["annotations"].get(name) or {}).get("status", "unlabeled"),
                 "people": len((project["annotations"].get(name) or {}).get("people", [])),
+                "auto_note": (project["annotations"].get(name) or {}).get("auto_note", ""),
             }
             for name in project["frames"]
         ],
@@ -374,7 +375,8 @@ def predict(filename: str):
                 visible = 2 if confidence >= min_point_conf and x > 0 and y > 0 else 0
                 out.append([round(x, 2) if visible else 0, round(y, 2) if visible else 0, visible])
             people.append({"id": len(people) + 1, "source": "yolo26", "keypoints": out})
-        return jsonify({"people": people, "model": model_name})
+        return jsonify({"people": people, "model": model_name,
+                        "width": int(result.orig_shape[1]), "height": int(result.orig_shape[0])})
     except Exception as exc:
         app.logger.exception("Pose inference failed for model %s", model_name)
         if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (126, 127, 1114):
@@ -386,6 +388,50 @@ def predict(filename: str):
                 f"Details: {exc}"
             )}), 503
         return jsonify({"error": f"Pose inference failed: {exc}"}), 500
+
+
+@app.post("/api/auto-label/<path:filename>")
+def auto_label_frame(filename: str):
+    """Process one queued frame and persist it without replacing reviewed work."""
+    body = request.get_json(silent=True) or {}
+    with PROJECT_LOCK:
+        original = load_project()
+        if body.get("folder") != original.get("folder"):
+            return jsonify({"error": "The project changed. Start a new automatic run."}), 409
+        get_frame_path(original, filename)
+        previous = original["annotations"].get(filename, {})
+        if previous.get("status", "unlabeled") != "unlabeled" or previous.get("people"):
+            return jsonify({"skipped": True}), 200
+
+    response = app.make_response(predict(filename))
+    result = response.get_json() or {}
+    # Invalid settings should stop the run without changing frame metadata.
+    if response.status_code == 400:
+        return response
+    with PROJECT_LOCK:
+        project = load_project()
+        if (any(project.get(key) != original.get(key) for key in ("folder", "mode", "frames"))
+                or project["annotations"].get(filename, {}) != previous):
+            return jsonify({"error": "Project or annotations changed during prediction. Automatic run stopped."}), 409
+        if response.status_code != 200:
+            project["annotations"][filename] = {
+                **previous, "status": "unlabeled", "auto_note": result.get("error", "Prediction failed")
+            }
+        else:
+            # A detection with no confident joints is still unlabeled.
+            people = [p for p in result["people"] if any(k[2] > 0 for k in p["keypoints"])]
+            people = validate_people(people, result["width"], result["height"])
+            project["annotations"][filename] = {
+                "status": "labeled" if people else "unlabeled",
+                "width": result["width"], "height": result["height"], "people": people,
+                "auto_note": "" if people else "No confident keypoints detected",
+            }
+        write_project(project)
+        write_csv(project)
+        entry = project["annotations"][filename]
+    if response.status_code != 200:
+        return response
+    return jsonify({"status": entry["status"], "people": entry["people"], "auto_note": entry["auto_note"]})
 
 
 @app.get("/api/export")
