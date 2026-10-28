@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e1521" />
+  <title>PoseFrame Studio — COCO-17 Annotation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true"><svg viewBox="0 0 34 34" fill="none"><path d="M17 4.5 4.5 11.5v11L17 29.5l12.5-7v-11L17 4.5Z" stroke="currentColor" stroke-width="1.5"/><circle cx="17" cy="10" r="2.5" fill="currentColor"/><path d="m17 13 0 8M17 16l-7 3m7-3 7 3m-7 2-4 6m4-6 4 6" stroke="currentColor" stroke-linecap="round" stroke-width="2"/></svg></div>
+        <div><div class="brand-title">PoseFrame <span>Studio</span></div><div class="brand-sub">KEYPOINT ANNOTATION WORKSPACE</div></div>
+      </div>
+      <div class="topbar-center"><span class="live-dot"></span><span>LOCAL WORKSPACE</span><span class="topbar-divider">/</span><span id="projectTitle">No project loaded</span></div>
+      <div class="header-actions">
+        <div class="save-indicator" id="saveIndicator"><span class="indicator-dot"></span><span id="saveIndicatorText">All changes saved</span></div>
+        <button class="btn btn-quiet" id="newProjectBtn"><span class="btn-icon">＋</span> Open folder</button>
+        <button class="btn btn-quiet" id="exportBtn" title="Export the current CSV"><span class="btn-icon">⇩</span> Export CSV</button>
+        <button class="btn btn-primary" id="saveBtn" title="Ctrl + S"><span class="btn-icon">▣</span> Save <kbd>Ctrl S</kbd></button>
+      </div>
+    </header>
+
+    <div class="workgrid">
+      <aside class="left-pane">
+        <div class="pane-top"><div><div class="eyebrow">DATASET</div><h2>Frames <span id="frameCount" class="muted-number">0</span></h2></div><button id="openFolderSmall" class="icon-button" title="Open a folder">＋</button></div>
+        <div class="search-wrap"><span class="search-icon">⌕</span><input id="frameSearch" type="search" placeholder="Search frame names..." autocomplete="off" aria-label="Search frame names"/><span class="search-hint">/</span></div>
+        <div class="filter-tabs" role="group" aria-label="Filter frames"><button data-filter="all" class="active">All</button><button data-filter="unlabeled">Unlabeled</button><button data-filter="labeled">Done</button></div>
+        <div class="frame-list" id="frameList" aria-label="Frame browser"></div>
+        <div class="dataset-footer"><div class="footer-label"><span>LABELING PROGRESS</span><span id="progressText">0 / 0</span></div><div class="progress-track"><div id="progressFill"></div></div><p>Annotations save as you move between frames.</p></div>
+      </aside>
+
+      <main class="main-pane">
+        <div class="editor-top"><div class="editor-heading"><div class="eyebrow">ANNOTATION CANVAS <span class="separation">/</span> <span id="framePosition">NO FRAME</span></div><h1 id="currentFilename">Select a frame to begin</h1></div><div class="editor-buttons"><button class="btn btn-quiet" id="prevBtn" title="Previous frame: Left arrow">← <span class="nav-label">Previous</span></button><button class="btn btn-quiet" id="nextBtn" title="Next frame: Right arrow"><span class="nav-label">Next</span> →</button></div></div>
+        <div class="editor-actionbar"><div class="action-cluster"><button id="addPersonBtn" class="btn btn-outline-accent"><span class="btn-icon">＋</span> Manual skeleton</button><button id="autoBtn" class="btn btn-glow"><span class="sparkle">✦</span> Auto-label with YOLO</button><div class="separator-vert"></div><span class="mini-text" id="annotationSummary">No keypoints placed</span></div><div class="action-cluster"><button id="undoBtn" class="icon-button" title="Undo (Ctrl+Z)" disabled>↶</button><button id="redoBtn" class="icon-button" title="Redo (Ctrl+Shift+Z)" disabled>↷</button></div></div>
+        <div class="stage" id="stage">
+          <div class="stage-corner top-left"><span class="stage-dot"></span> <span id="stageMeta">IMAGE VIEWER</span></div>
+          <div class="stage-corner top-right"><span id="coordinateMeta">COCO · PIXEL SPACE</span></div>
+          <div class="empty-stage" id="emptyStage"><div class="empty-art"><div class="empty-art-inner"><svg viewBox="0 0 160 155" fill="none" aria-hidden="true"><path d="M30 40 80 11l50 29v71l-50 28-50-28V40Z" stroke="#3c666c" stroke-width="2" stroke-dasharray="6 7"/><circle cx="80" cy="34" r="9" stroke="#65cfc5" stroke-width="3"/><path d="M80 45v47M80 59l-28 21m28-21 28 21M80 92l-19 28m19-28 19 28" stroke="#65cfc5" stroke-linecap="round" stroke-width="4"/><circle cx="52" cy="80" r="5" fill="#65cfc5"/><circle cx="108" cy="80" r="5" fill="#65cfc5"/><circle cx="61" cy="120" r="5" fill="#65cfc5"/><circle cx="99" cy="120" r="5" fill="#65cfc5"/></svg></div></div><div class="empty-eyebrow">YOUR LABELING WORKSPACE</div><h2>Every frame. Every keypoint.</h2><p>Import a folder of video frames to start annotating with 17-point COCO human poses.</p><button id="emptyImportBtn" class="btn btn-primary btn-large">＋ &nbsp; Choose image folder</button><div class="empty-support">JPG · PNG · WEBP · BMP &nbsp; / &nbsp; Autosave on navigation</div></div>
+          <div id="surface" class="image-surface hidden"><img id="frameImage" alt="Current video frame" draggable="false" /><svg id="poseOverlay" xmlns="http://www.w3.org/2000/svg" aria-label="Draggable human pose keypoint overlay"></svg></div>
+          <div class="stage-busy hidden" id="busyOverlay"><div class="loader-circle"></div><strong id="busyTitle">Running pose estimation</strong><p id="busySubtitle">Preparing YOLO model...</p></div>
+          <div class="stage-hint" id="stageHint">Drag points to adjust &nbsp;·&nbsp; Click a point to select</div>
+        </div>
+        <div class="canvas-footer"><div class="foot-left"><div class="stepper"><button id="footPrev" title="Previous frame">‹</button><span id="footCounter">0 <span>/</span> 0</span><button id="footNext" title="Next frame">›</button></div><input type="range" id="frameRange" min="0" max="0" value="0" aria-label="Jump to frame"/><span id="timelineTime" class="timeline-time">—</span></div><div class="foot-right"><button class="zoom-button" id="zoomOut" title="Zoom out">−</button><button class="zoom-display" id="zoomReset" title="Fit image to screen">Fit <span id="zoomText">100%</span></button><button class="zoom-button" id="zoomIn" title="Zoom in">＋</button></div></div>
+        <div class="shortcut-strip"><div><span class="shortcut-dot"></span> COCO 17-POINT SKELETON <span class="shortcut-muted">• 19 connections</span></div><div class="shortcut-items"><span><kbd>←</kbd><kbd>→</kbd> Navigate</span><span><kbd>Ctrl</kbd><kbd>S</kbd> Save</span><span><kbd>Ctrl</kbd><kbd>Z</kbd> Undo</span></div></div>
+      </main>
+
+      <aside class="right-pane"><div class="inspector-header"><div class="eyebrow">ANNOTATION TOOLS</div><h2>Keypoint Inspector</h2><p>COCO human pose · 17 landmarks</p></div>
+        <div class="right-scroll">
+          <div class="section-heading"><h3>People <span class="count-pill" id="peopleCount">0</span></h3><button class="subtle-link" id="inspectorAddBtn">＋ Add</button></div>
+          <div id="peopleTabs" class="people-tabs"><div class="no-people">No people annotated yet</div></div>
+          <div class="person-settings"><span class="source-tag" id="sourceTag">NO SELECTION</span><button class="delete-person" id="deletePersonBtn" title="Remove selected person" disabled>♲ Remove</button></div>
+          <div class="panel-divider"></div>
+          <div class="section-heading"><h3>Body landmarks</h3><span class="subtle-muted">X · Y · V</span></div>
+          <div class="legend"><span><i class="legend-dot visible"></i> Visible (2)</span><span><i class="legend-dot occluded"></i> Occluded (1)</span><span><i class="legend-dot missing"></i> Unlabeled (0)</span></div>
+          <div id="keypointList" class="keypoint-list"></div>
+          <div class="panel-divider"></div>
+          <div class="section-heading"><h3>Selected keypoint</h3><span class="subtle-muted" id="selectedPointNumber">—</span></div>
+          <div class="selected-info"><span id="selectedPointName">Select a point</span><span id="selectedPointStatus">—</span></div>
+          <div class="coord-editors"><label>X <input id="editX" type="number" step="0.1" min="0" disabled/></label><label>Y <input id="editY" type="number" step="0.1" min="0" disabled/></label></div>
+          <button class="btn btn-quiet full-width" id="placeBtn" disabled><span>◎</span> <span id="placeBtnText">Place point by clicking image</span></button>
+          <div class="panel-divider"></div>
+          <div class="section-heading"><h3>Display options</h3></div>
+          <label class="toggle-row">Skeleton connections <input id="showSkeleton" type="checkbox" checked/><span class="switch"></span></label>
+          <label class="toggle-row">Keypoint numbers <input id="showNumbers" type="checkbox"/><span class="switch"></span></label>
+          <div class="panel-divider"></div>
+          <div class="section-heading"><h3>Model preferences</h3></div>
+          <label class="field-label" for="modelSelect">POSE MODEL</label><select id="modelSelect" class="model-select"><option value="yolo26x-pose.pt">YOLO26x Pose · Highest quality</option><option value="yolo26l-pose.pt">YOLO26l Pose · Large</option><option value="yolo26m-pose.pt">YOLO26m Pose · Medium</option><option value="yolo26s-pose.pt">YOLO26s Pose · Small</option><option value="yolo26n-pose.pt">YOLO26n Pose · Fastest</option></select>
+          <label class="field-label threshold-title" for="pointThreshold">KEYPOINT CONFIDENCE <span id="thresholdValue">0.45</span></label><input type="range" id="pointThreshold" min="0.1" max="0.9" step="0.05" value="0.45" class="wide-range"/><p class="model-help">YOLO scores become visible (v=2) or unlabeled (v=0). Mark occluded joints (v=1) manually.</p>
+        </div>
+        <div class="inspector-footer"><div class="footer-icon">ⓘ</div><p>Coordinates are saved in the <strong>original image resolution</strong>, not screen pixels.</p></div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="importModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="importTitle"><div class="modal-card"><div class="modal-heading"><div class="modal-icon">▧</div><button id="closeModal" class="icon-button modal-close" aria-label="Close">×</button></div><div class="eyebrow">CREATE / OPEN A PROJECT</div><h2 id="importTitle">Import your video frames</h2><p class="modal-desc">Frames are ordered chronologically by filename. Label every person in a frame and export a single COCO-compatible CSV.</p>
+      <div class="modal-tabs"><button data-tab="upload" class="active">Upload folder</button><button data-tab="path">Use local folder path</button></div>
+      <div id="uploadPanel"><div class="dropzone" id="pickFolder"><div class="drop-icon">▧</div><strong>Choose a folder of frames</strong><span>All JPG, PNG, WEBP and BMP images will be imported.</span><span class="drop-browse">Browse folders →</span></div><input id="folderInput" type="file" webkitdirectory directory multiple hidden accept="image/*"/><p class="modal-note">Images are copied into this app's <code>data/frames/</code> folder. For very large datasets, the local folder path option is faster.</p></div>
+      <div id="pathPanel" class="hidden"><label class="field-label" for="pathInput">ABSOLUTE DIRECTORY PATH</label><input id="pathInput" class="path-input" type="text" placeholder="C:\Users\you\Videos\frames or /home/you/frames" spellcheck="false"/><p class="modal-note">Reads images directly from this computer without copying. The path must be readable by the Python server. Only images directly inside the selected folder are loaded.</p><button class="btn btn-primary full-width import-path-button" id="loadPathBtn">Open this folder →</button></div>
+      <div class="import-progress hidden" id="importProgress"><div class="progress-info"><span id="importProgressText">Importing...</span><span id="importProgressPercent">0%</span></div><div class="progress-track"><div id="importProgressFill"></div></div></div>
+      <div class="import-error hidden" id="importError"></div>
+    </div></div>
+  <div id="toastHost" class="toast-host" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
