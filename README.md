@@ -151,6 +151,7 @@ The local server listens on **127.0.0.1** by default, so other computers cannot 
 ### Troubleshooting
 
 - **Auto label says Ultralytics not installed:** stop server, run the matching `install_yolo` script, restart it.
+- **Windows DLL error (`c10.dll`, WinError 126/127/1114):** install or repair the [Microsoft Visual C++ x64 runtime](https://aka.ms/vc14/vc_redist.x64.exe), restart Windows if requested, then restart `run.bat`. If it persists, run `install_yolo.bat` again; it now checks that PyTorch and Ultralytics actually load.
 - **Model takes a long time:** first use downloads weights and initializes PyTorch. `yolo26x-pose.pt` is much heavier than `yolo26n-pose.pt`; try the `n` model on CPU.
 - **Web browser does not open:** manually navigate to `http://127.0.0.1:8765`.
 - **Path input fails in WSL:** use a WSL path like `/mnt/c/Users/...`, not `C:\Users\...`.

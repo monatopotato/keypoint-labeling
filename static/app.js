@@ -223,7 +223,7 @@ function applyZoom() {
   el('zoomText').textContent=`${Math.round(S.zoom*100)}%`;
   renderOverlay();
 }
-function zoomBy(factor) {S.zoom=clamp(Math.round(S.zoom*factor*100)/100,.25,5);applyZoom()}
+function zoomBy(factor) {S.zoom=clamp(Math.round(S.zoom*factor*100)/100,.25,10);applyZoom()}
 function snapshotUndo() {
   S.undo.push({people:deep(S.people),selectedPerson:S.selectedPerson,selectedPoint:S.selectedPoint});
   if(S.undo.length>45)S.undo.shift();S.redo=[];

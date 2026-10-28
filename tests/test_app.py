@@ -4,6 +4,7 @@ import io
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 # Set a fresh location before the application's module-level constants are defined.
@@ -70,6 +71,30 @@ class PoseFrameTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/import/finish').json['count'],1)
         self.assertEqual(self.client.get('/api/image/frame_01.jpg').status_code,200)
         self.assertEqual(self.client.get('/api/image/not_found.jpg').status_code,404)
+
+    def test_predict_reports_windows_dependency_failure(self):
+        error = OSError('Error loading c10.dll or one of its dependencies')
+        error.winerror = 126
+        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', side_effect=error):
+            response = self.client.post('/api/predict/2026-10-21-12-30-01-000.jpg', json={})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('Visual C++ x64 runtime', response.json['error'])
+        self.assertIn('restart run.bat', response.json['error'])
+
+    def test_predict_converts_confidence_to_visibility(self):
+        result = Mock()
+        result.keypoints.data.cpu.return_value.tolist.return_value = [
+            [[10, 20, 0.9], [30, 40, 0.2]] + [[50, 60, 0.8] for _ in range(15)]
+        ]
+        model = Mock()
+        model.predict.return_value = [result]
+        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', return_value=model):
+            response = self.client.post('/api/predict/2026-10-21-12-30-01-000.jpg', json={})
+        self.assertEqual(response.status_code, 200)
+        points = response.json['people'][0]['keypoints']
+        self.assertEqual(len(points), 17)
+        self.assertEqual(points[0], [10, 20, 2])
+        self.assertEqual(points[1], [0, 0, 0])
 
 
 if __name__=='__main__': unittest.main()

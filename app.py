@@ -376,6 +376,15 @@ def predict(filename: str):
             people.append({"id": len(people) + 1, "source": "yolo26", "keypoints": out})
         return jsonify({"people": people, "model": model_name})
     except Exception as exc:
+        app.logger.exception("Pose inference failed for model %s", model_name)
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (126, 127, 1114):
+            return jsonify({"error": (
+                "YOLO could not load a Windows dependency. Install or repair the Microsoft "
+                "Visual C++ x64 runtime from https://aka.ms/vc14/vc_redist.x64.exe, "
+                "then restart run.bat (restart Windows if the installer requests it). "
+                "If the error persists, run install_yolo.bat again. "
+                f"Details: {exc}"
+            )}), 503
         return jsonify({"error": f"Pose inference failed: {exc}"}), 500
 
 
@@ -398,6 +407,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("POSEFRAME_PORT", "8765"))
     if os.environ.get("POSEFRAME_OPEN_BROWSER", "1") == "1":
         threading.Timer(1.1, lambda: webbrowser.open(f"http://{host}:{port}")).start()
-    print(f"\n  PoseFrame Studio  →  http://{host}:{port}")
-    print(f"  Annotations CSV   →  {CSV_FILE}\n")
+    print(f"\n  PoseFrame Studio  ->  http://{host}:{port}")
+    print(f"  Annotations CSV   ->  {CSV_FILE}\n")
     app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
