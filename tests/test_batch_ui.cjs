@@ -21,11 +21,14 @@ const root = path.resolve(__dirname, '..');
       const url = new URL(route.request().url());
       const json = (body, status=200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.pathname === '/api/project') return json({folder: 'test', mode: 'path', frames});
+      if (url.pathname === '/api/devices') return json({torch_version: '2.14.1+cpu', cuda_available: false});
       if (url.pathname.startsWith('/api/annotations/')) {
         const f = frames.find(f => f.name === url.pathname.split('/').pop());
         return json({people: f.people ? people : [], status: f.status});
       }
       if (url.pathname.startsWith('/api/auto-label/')) {
+        assert.equal(route.request().postDataJSON().detection_mode, 'distant');
+        assert.equal(route.request().postDataJSON().confidence, 0.15);
         const name = url.pathname.split('/').pop(); requests.push(name);
         if(delay) await new Promise(resolve => setTimeout(resolve, delay));
         const f = frames.find(f => f.name === name);

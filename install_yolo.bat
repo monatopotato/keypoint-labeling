@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 echo Installing Ultralytics YOLO26 and PyTorch. This may download large packages.
-".venv\Scripts\python.exe" -m pip install -r requirements-yolo.txt
+".venv\Scripts\python.exe" install_pytorch.py %*
 if errorlevel 1 (
     echo Installation failed. Check internet access and Python version.
     pause

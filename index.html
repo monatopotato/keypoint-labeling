@@ -74,6 +74,14 @@
           <label class="toggle-row">Keypoint numbers <input id="showNumbers" type="checkbox"/><span class="switch"></span></label>
           <div class="panel-divider"></div>
           <div class="section-heading"><h3>Model preferences</h3></div>
+          <label class="field-label" for="deviceSelect">PROCESSING DEVICE</label>
+          <select id="deviceSelect" class="model-select"><option value="auto">Auto · GPU when available</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU · CUDA</option></select>
+          <p id="deviceStatus" class="model-help">Checking PyTorch devices…</p>
+          <label class="field-label threshold-title" for="detectionMode">DETECTION METHOD</label>
+          <select id="detectionMode" class="model-select"><option value="standard">Standard · full image</option><option value="distant" selected>Distant people · overlapping crops</option></select>
+          <p id="detectionHelp" class="model-help">Enlarges overlapping crops to find small people. Slower on CPU; review predictions for false detections. Requires 4 confident joints; weak detections need 12 joints and agreement across crops.</p>
+          <label class="field-label threshold-title" for="personThreshold">PERSON CONFIDENCE <span id="personThresholdValue">0.15</span></label>
+          <input id="personThreshold" class="wide-range" type="range" min="0.05" max="0.75" step="0.05" value="0.15"/>
           <label class="field-label" for="modelSelect">POSE MODEL</label><select id="modelSelect" class="model-select"><option value="yolo26x-pose.pt">YOLO26x Pose · Highest quality</option><option value="yolo26l-pose.pt">YOLO26l Pose · Large</option><option value="yolo26m-pose.pt">YOLO26m Pose · Medium</option><option value="yolo26s-pose.pt">YOLO26s Pose · Small</option><option value="yolo26n-pose.pt">YOLO26n Pose · Fastest</option></select>
           <label class="field-label threshold-title" for="pointThreshold">KEYPOINT CONFIDENCE <span id="thresholdValue">0.45</span></label><input type="range" id="pointThreshold" min="0.1" max="0.9" step="0.05" value="0.45" class="wide-range"/><p class="model-help">YOLO scores become visible (v=2) or unlabeled (v=0). Mark occluded joints (v=1) manually.</p>
         </div>

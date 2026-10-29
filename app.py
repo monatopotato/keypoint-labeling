@@ -13,6 +13,7 @@ import webbrowser
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from pose_inference import predict_distant
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
 
@@ -333,19 +334,49 @@ def save_annotations(filename: str):
 
 
 @lru_cache(maxsize=3)
-def load_yolo_model(model_name: str):
+def load_yolo_model(model_name: str, device: str = "cpu"):
     from ultralytics import YOLO
     return YOLO(model_name)
+
+
+def resolve_device(requested: str) -> str:
+    if requested == "cpu":
+        return "cpu"
+    import torch
+    if torch.cuda.is_available():
+        return "cuda:0"
+    if requested == "cuda":
+        raise RuntimeError("NVIDIA GPU is unavailable. Select CPU or Auto. On a computer with an NVIDIA GPU, "
+                           "install its driver and run install_yolo.bat --device cuda, then restart the server.")
+    return "cpu"
+
+
+@app.get("/api/devices")
+def devices():
+    try:
+        import torch
+        cuda = torch.cuda.is_available()
+        return jsonify({"torch_version": torch.__version__, "cuda_available": cuda,
+                        "gpu_name": torch.cuda.get_device_name(0) if cuda else None,
+                        "default_device": "cuda:0" if cuda else "cpu"})
+    except Exception as exc:
+        return jsonify({"cuda_available": False, "error": str(exc)}), 503
 
 
 @app.post("/api/predict/<path:filename>")
 def predict(filename: str):
     body = request.get_json(silent=True) or {}
     model_name = str(body.get("model", "yolo26x-pose.pt"))
+    requested_device = body.get("device", "auto")
+    detection_mode = body.get("detection_mode", "standard")
+    if detection_mode not in ("standard", "distant"):
+        return jsonify({"error": "Detection mode must be standard or distant"}), 400
+    if requested_device not in ("auto", "cpu", "cuda"):
+        return jsonify({"error": "Device must be auto, cpu or cuda"}), 400
     if model_name not in MODELS:
         return jsonify({"error": "Unsupported pose model"}), 400
     try:
-        min_conf = float(body.get("confidence", 0.25))
+        min_conf = float(body.get("confidence", 0.15 if detection_mode == "distant" else 0.25))
         min_point_conf = float(body.get("keypoint_confidence", 0.45))
         if not (0 <= min_conf <= 1 and 0 <= min_point_conf <= 1):
             raise ValueError()
@@ -359,8 +390,16 @@ def predict(filename: str):
         # Model loads once, on first use. We serialize predictions to avoid
         # racing model initialization or CUDA kernels in this local server.
         with MODEL_LOCK:
-            model = load_yolo_model(model_name)
-            result = model.predict(source=str(path), conf=min_conf, imgsz=1280, verbose=False)[0]
+            try:
+                device = resolve_device(requested_device)
+            except RuntimeError as exc:
+                return jsonify({"error": str(exc)}), 503
+            # Separate cached models prevent a CPU/GPU switch from reusing a predictor on the wrong device.
+            model = load_yolo_model(model_name, device)
+            if detection_mode == "distant":
+                prediction = predict_distant(model, path, device, min_conf, min_point_conf)
+                return jsonify({**prediction, "model": model_name, "device": device, "detection_mode": detection_mode})
+            result = model.predict(source=str(path), conf=min_conf, imgsz=1280, device=device, verbose=False)[0]
             data = result.keypoints.data.cpu().tolist() if result.keypoints is not None else []
         people = []
         for points in data:
@@ -375,7 +414,7 @@ def predict(filename: str):
                 visible = 2 if confidence >= min_point_conf and x > 0 and y > 0 else 0
                 out.append([round(x, 2) if visible else 0, round(y, 2) if visible else 0, visible])
             people.append({"id": len(people) + 1, "source": "yolo26", "keypoints": out})
-        return jsonify({"people": people, "model": model_name,
+        return jsonify({"people": people, "model": model_name, "device": device,
                         "width": int(result.orig_shape[1]), "height": int(result.orig_shape[0])})
     except Exception as exc:
         app.logger.exception("Pose inference failed for model %s", model_name)

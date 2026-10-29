@@ -35,6 +35,24 @@ If you use **WSL**, use `./run.sh` in the WSL shell. To import by folder path, u
 
 ## 2. Install YOLO26 for automatic labeling (optional)
 
+### Small / distant people
+
+The **Detection method** selector defaults to **Distant people**, for single-frame and automatic labeling. It runs the full image plus overlapping square crops, each at YOLO input size 1280. **Standard** runs only the full image. On a 1280×800 frame, distant mode uses six 512×512 crops plus the full image (7 predictions). It is substantially slower on CPU; try a few frames before processing a large dataset.
+
+The person occupies about `1280 / 512 = 2.5` times as many input pixels vertically in a crop as in the full-width image. This magnifies existing information; it cannot recover details missing from the source. Crops overlap by at least 25% so a person on a tile boundary can be detected in a neighboring crop. YOLO returns coordinates in crop pixels, which are mapped back using `x_original = x_crop + crop_left`, `y_original = y_crop + crop_top`. Missing joints remain `[0,0,0]`.
+
+Distant mode uses a default **person confidence** threshold of 0.15 (Standard: 0.25), independently of the **keypoint confidence** threshold. It requires at least four confident joints and merges overlapping boxes using intersection-over-union ≥ 0.45, retaining the stronger complete skeleton. This reduces duplicate poses but can still confuse overlapping people. Lower confidence improves recall at the cost of false positives: review the results, especially weak or occluded joints. Use the Unlabeled section to retry missed frames; reviewed/labeled frames are preserved by batch runs.
+
+This implements the [overlapping sliced-inference approach described by Ultralytics](https://docs.ultralytics.com/guides/sahi-tiled-inference/) directly for pose keypoints; no extra SAHI installation is required.
+
+The installer pins **PyTorch 2.14.1 / torchvision 0.29.1** (Python 3.11+), using the [official matched wheel builds](https://pytorch.org/get-started/previous-versions/). Choose a build:
+
+- CPU: `install_yolo.bat --device cpu` (default).
+- NVIDIA GPU and CPU: `install_yolo.bat --device cuda` (CUDA 12.6), or `install_yolo.bat --device cuda --cuda cu130` for the CUDA 13.0 build. Requires compatible NVIDIA hardware and driver.
+- On Linux, pass the same options to `./install_yolo.sh`. On macOS, use its default CPU option.
+
+In **Model preferences → Processing device**, choose **Auto**, **CPU**, or **NVIDIA GPU**. Auto uses CUDA when PyTorch reports it available, otherwise CPU. Both single-frame and automatic labeling use this setting. The panel shows the installed PyTorch build and detected GPU. Intel integrated graphics uses CPU with this setup. Restart the server after changing builds. Auto fallback handles unavailable CUDA; inference failures such as GPU out-of-memory are reported rather than silently retried.
+
 Manual pose annotation works immediately with the basic installation. To enable auto-labeling, **stop the server**, then run:
 
 Windows:
@@ -164,3 +182,5 @@ The local server listens on **127.0.0.1** by default, so other computers cannot 
 ### Dependencies & licensing
 
 Flask is licensed under BSD-3-Clause. Ultralytics software and model weights have license terms that may affect commercial distribution, notably AGPL-3.0 or commercial licensing; check [Ultralytics' licensing information](https://www.ultralytics.com/license) for your use case. No Ultralytics code or pretrained model is bundled inside this ZIP.
+
+Weak distant-mode detections (person score below 0.35) additionally require at least 12 confident joints and overlap agreement from two distinct views. This conservative heuristic reduced background false positives in the sample frames; it can also reject real, heavily occluded people. Detections scoring 0.35 or higher still require at least four confident joints.

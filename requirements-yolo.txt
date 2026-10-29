@@ -1,2 +1,4 @@
 -r requirements.txt
+torch==2.14.1
+torchvision==0.29.1
 ultralytics>=8.4.0

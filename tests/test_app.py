@@ -10,7 +10,7 @@ from pathlib import Path
 # Set a fresh location before the application's module-level constants are defined.
 _TEST_TMP = tempfile.TemporaryDirectory()
 os.environ["POSEFRAME_DATA"] = _TEST_TMP.name
-from app import app, filename_sort_key, KEYPOINTS, CSV_FIELDS, PROJECT_FILE  # noqa: E402
+from app import app, filename_sort_key, KEYPOINTS, CSV_FIELDS, PROJECT_FILE, resolve_device  # noqa: E402
 
 
 class PoseFrameTests(unittest.TestCase):
@@ -76,7 +76,7 @@ class PoseFrameTests(unittest.TestCase):
     def test_predict_reports_windows_dependency_failure(self):
         error = OSError('Error loading c10.dll or one of its dependencies')
         error.winerror = 126
-        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', side_effect=error):
+        with patch('app.resolve_device', return_value='cpu'), patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', side_effect=error):
             response = self.client.post('/api/predict/2026-10-21-12-30-01-000.jpg', json={})
         self.assertEqual(response.status_code, 503)
         self.assertIn('Visual C++ x64 runtime', response.json['error'])
@@ -90,13 +90,45 @@ class PoseFrameTests(unittest.TestCase):
         ]
         model = Mock()
         model.predict.return_value = [result]
-        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', return_value=model):
+        with patch('app.resolve_device', return_value='cpu'), patch('app.importlib.util.find_spec', return_value=object()), patch('app.load_yolo_model', return_value=model):
             response = self.client.post('/api/predict/2026-10-21-12-30-01-000.jpg', json={})
         self.assertEqual(response.status_code, 200)
         points = response.json['people'][0]['keypoints']
         self.assertEqual(len(points), 17)
         self.assertEqual(points[0], [10, 20, 2])
         self.assertEqual(points[1], [0, 0, 0])
+        self.assertEqual(model.predict.call_args.kwargs['device'], 'cpu')
+        self.assertEqual(response.json['device'], 'cpu')
+
+    def test_device_selection_and_cpu_fallback(self):
+        torch = Mock()
+        with patch.dict('sys.modules', {'torch': torch}):
+            torch.cuda.is_available.return_value = False
+            self.assertEqual(resolve_device('auto'), 'cpu')
+            self.assertEqual(resolve_device('cpu'), 'cpu')
+            with self.assertRaisesRegex(RuntimeError, 'NVIDIA GPU is unavailable'):
+                resolve_device('cuda')
+            torch.cuda.is_available.return_value = True
+            self.assertEqual(resolve_device('auto'), 'cuda:0')
+            self.assertEqual(resolve_device('cuda'), 'cuda:0')
+            self.assertEqual(resolve_device('cpu'), 'cpu')
+
+    def test_invalid_or_unavailable_device(self):
+        url = '/api/predict/2026-10-21-12-30-01-000.jpg'
+        self.assertEqual(self.client.post(url, json={'device': 'invalid'}).status_code, 400)
+        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.resolve_device', side_effect=RuntimeError('GPU unavailable')):
+            self.assertEqual(self.client.post(url, json={'device': 'cuda'}).status_code, 503)
+
+    def test_distant_mode_validation_and_settings(self):
+        url = '/api/predict/2026-10-21-12-30-01-000.jpg'
+        self.assertEqual(self.client.post(url, json={'detection_mode': 'bad'}).status_code, 400)
+        with patch('app.importlib.util.find_spec', return_value=object()), patch('app.resolve_device', return_value='cpu'), patch('app.load_yolo_model') as loader, patch('app.predict_distant') as distant:
+            distant.return_value = {'people': [], 'width': 640, 'height': 480, 'passes': 7}
+            response = self.client.post(url, json={'detection_mode': 'distant'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json['passes'], 7)
+            self.assertEqual(distant.call_args.args[2:], ('cpu', .15, .45))
+            loader.return_value.predict.assert_not_called()
 
     def auto_label(self):
         return self.client.post('/api/auto-label/2026-10-21-12-30-01-000.jpg',

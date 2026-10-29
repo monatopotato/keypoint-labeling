@@ -6,5 +6,5 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 echo 'Installing Ultralytics and PyTorch (large download)...'
-.venv/bin/python -m pip install -r requirements-yolo.txt
+.venv/bin/python install_pytorch.py "$@"
 echo 'Done. Restart the web server to use YOLO.'
