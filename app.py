@@ -360,7 +360,7 @@ def predict(filename: str):
         # racing model initialization or CUDA kernels in this local server.
         with MODEL_LOCK:
             model = load_yolo_model(model_name)
-            result = model.predict(source=str(path), conf=min_conf, imgsz=640, verbose=False)[0]
+            result = model.predict(source=str(path), conf=min_conf, imgsz=1280, verbose=False)[0]
             data = result.keypoints.data.cpu().tolist() if result.keypoints is not None else []
         people = []
         for points in data:
