@@ -43,7 +43,8 @@ class PoseFrameTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/annotations/'+name).json['people'][0]['keypoints'][4],[12.0,16.0,2])
         rows=list(csv.DictReader(io.StringIO(self.client.get('/api/export').data.decode('utf-8'))))
         self.assertEqual(len(rows),4)  # two people on first frame, one placeholder per other frame
-        self.assertEqual(len(rows[0]),59)
+        self.assertEqual(len(rows[0]),93)
+        self.assertEqual(rows[0]['nose_manual_confidence'],'')
         self.assertEqual(rows[0]['person_id'],'1')
         self.assertEqual(rows[0]['right_ankle_v'],'2')
         self.assertEqual(rows[1]['source'],'yolo26')
@@ -97,6 +98,20 @@ class PoseFrameTests(unittest.TestCase):
         self.assertEqual(len(points), 17)
         self.assertEqual(points[0], [10, 20, 2])
         self.assertEqual(points[1], [0, 0, 0])
+        person=response.json['people'][0]
+        self.assertEqual(person['model_confidence'][:2], [0.9, 0.2])
+        person['manual_confidence']=[0.0, 0.85]+[None]*15
+        url='/api/annotations/2026-10-21-12-30-01-000.jpg'
+        payload={'width':640,'height':480,'people':[person]}
+        self.assertEqual(self.client.put(url,json=payload).status_code,200)
+        self.assertEqual(self.client.get(url).json['people'][0]['manual_confidence'],person['manual_confidence'])
+        with self.client.get('/api/export') as exported:
+            row=next(csv.DictReader(io.StringIO(exported.data.decode('utf-8'))))
+        self.assertEqual(float(row['nose_manual_confidence']),0)
+        self.assertEqual(float(row['left_eye_model_confidence']),0.2)
+        self.assertEqual(row['right_eye_manual_confidence'],'')
+        person['manual_confidence'][0]=1.01
+        self.assertEqual(self.client.put(url,json=payload).status_code,400)
         self.assertEqual(model.predict.call_args.kwargs['device'], 'cpu')
         self.assertEqual(response.json['device'], 'cpu')
 

@@ -302,6 +302,11 @@ function renderSelectedInfo() {
   el('selectedPointName').textContent=person?nice(NAMES[S.selectedPoint]):'Select a point';
   el('selectedPointNumber').textContent=person?`POINT ${S.selectedPoint+1} / 17`:'—';
   el('selectedPointStatus').textContent=p?(p[2]===2?'Visible':p[2]===1?'Occluded':'Not labeled'):'—';
+  const modelScore=person?.model_confidence?.[S.selectedPoint];
+  const manualScore=person?.manual_confidence?.[S.selectedPoint];
+  el('modelConfidence').textContent=modelScore==null?'—':(modelScore*100).toFixed(1)+'%';
+  el('manualConfidence').disabled=!p || S.busy;
+  el('manualConfidence').value=manualScore==null?'':String(+(manualScore*100).toFixed(4));
   el('editX').disabled=!p || !p[2]; el('editY').disabled=!p || !p[2];
   el('editX').value=p&&p[2]?String(p[0]):'';el('editY').value=p&&p[2]?String(p[1]):'';
   el('placeBtn').disabled=!p||S.busy;
@@ -596,6 +601,20 @@ function wireEvents() {
     else p[2]=v;
     S.selectedPoint=i;setDirty();renderPoints();renderOverlay();renderHeader();
   });
+  el('manualConfidence').addEventListener('change',evt=>{
+    const person=selectedPerson(),input=evt.target;
+    if(!person || S.busy)return;
+    if(!input.validity.valid){
+      toast('Enter a confidence from 0 to 100%, or clear it to leave the joint unrated.',true);
+      renderSelectedInfo();return;
+    }
+    const score=input.value===''?null:input.valueAsNumber/100;
+    if((person.manual_confidence?.[S.selectedPoint]??null)===score)return;
+    snapshotUndo();
+    person.manual_confidence??=Array(17).fill(null);
+    person.manual_confidence[S.selectedPoint]=score;
+    setDirty();renderSelectedInfo();
+  });
   for(const [id,coord,limit] of [['editX',0,()=>S.width],['editY',1,()=>S.height]]){
     el(id).addEventListener('change',evt=>{
       const p=selectedPerson()?.keypoints[S.selectedPoint];if(!p||!p[2])return;
@@ -615,7 +634,7 @@ function wireEvents() {
     el('personThreshold').value=el('detectionMode').value==='standard'?'0.25':'0.15';
     el('personThresholdValue').textContent=Number(el('personThreshold').value).toFixed(2);
     el('detectionHelp').textContent=distant?'Enlarges overlapping crops to find small people. Slower on CPU; review predictions for false detections. Requires 4 confident joints; weak detections need 12 joints and agreement across crops.':'One full-image pass. Faster, but may miss small or distant people.';
-    if(el('detectionMode').value==='person_zoom')el('detectionHelp').textContent='Detects each person, enlarges their crop for pose estimation, and places joints on the original frame.';
+    if(el('detectionMode').value==='person_zoom')el('detectionHelp').textContent='Detects people and enlarges each pose crop. If no usable pose is found, smaller tiles search for tiny people. Empty frames may take longer.';
   });
   el('poseOverlay').addEventListener('pointerdown',mouseDown);
   el('poseOverlay').addEventListener('contextmenu',hidePointOnRightClick);

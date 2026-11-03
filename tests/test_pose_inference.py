@@ -7,6 +7,32 @@ from pose_inference import box_iou, merge_candidates, result_candidates, tile_wi
 
 
 class DistantPoseTests(unittest.TestCase):
+    def test_fine_retry_finds_small_person_in_original_coordinates(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Optional YOLO image dependencies not installed')
+        picture = BytesIO()
+        Image.new('RGB', (640, 400)).save(picture, format='PNG')
+        picture.seek(0)
+        empty, hit, pose = Mock(), Mock(), Mock()
+        empty.boxes.xyxy.tolist.return_value = []
+        empty.boxes.conf.tolist.return_value = []
+        hit.boxes.xyxy.tolist.return_value = [[20, 20, 40, 70]]
+        hit.boxes.conf.tolist.return_value = [.5]
+        # Fine tile starts at (400,200); the 20x50 person crop starts at (366,181).
+        pose.boxes.xyxy.cpu.return_value.tolist.return_value = [[54,39,74,89]]
+        pose.boxes.conf.cpu.return_value.tolist.return_value = [.8]
+        pose.keypoints.data.cpu.return_value.tolist.return_value = [[[64,49,.9]] * 16 + [[0,0,0]]]
+        detector, model = Mock(), Mock()
+        detector.predict.side_effect = [[empty], [empty], [hit]]
+        model.predict.return_value = [pose]
+        with patch('pose_inference.tile_windows', side_effect=[[(0,0,256,256)], [(400,200,528,328)]]):
+            result = predict_person_zoom(detector, model, picture, 'cpu', .15, .45)
+        self.assertEqual(model.predict.call_args.kwargs['source'].size, (128,128))
+        self.assertEqual(result['people'][0]['keypoints'][0], [430,230,2])
+        self.assertEqual(result['people'][0]['keypoints'][-1], [0,0,0])
+
     def test_person_zoom_keeps_tile_only_subject_after_full_frame_detection(self):
         try:
             from PIL import Image

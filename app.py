@@ -33,6 +33,7 @@ KEYPOINTS = [
 CSV_FIELDS = (
     ["filename", "frame_index", "annotation_status", "person_id", "source", "num_keypoints", "image_width", "image_height"]
     + [f"{point}_{part}" for point in KEYPOINTS for part in ("x", "y", "v")]
+    + [f"{point}_{field}" for point in KEYPOINTS for field in ("model_confidence", "manual_confidence")]
 )
 PROJECT_LOCK = threading.RLock()
 MODEL_LOCK = threading.Lock()
@@ -120,6 +121,9 @@ def csv_rows(project: dict[str, Any]):
                 row[f"{label}_x"] = x if v else 0
                 row[f"{label}_y"] = y if v else 0
                 row[f"{label}_v"] = v
+            for field in ("model_confidence", "manual_confidence"):
+                for label, score in zip(KEYPOINTS, person.get(field, [])):
+                    row[f"{label}_{field}"] = score
             yield row
 
 
@@ -188,10 +192,22 @@ def validate_people(raw: Any, width: int, height: int) -> list[dict[str, Any]]:
                 points.append([0, 0, 0])
             else:
                 points.append([round(min(max(x, 0), width), 2), round(min(max(y, 0), height), 2), int(v)])
+        scores = {}
+        for field in ("model_confidence", "manual_confidence"):
+            if field not in person:
+                continue
+            values = person[field]
+            if not isinstance(values, list) or len(values) != 17 or any(
+                value is not None and (type(value) not in (int, float) or not 0 <= value <= 1)
+                for value in values
+            ):
+                raise ValueError(f"{field} must contain 17 numbers from 0 to 1 or null")
+            scores[field] = values
         people.append({
             "id": i + 1,
             "source": "yolo26" if person.get("source") == "yolo26" else "manual",
             "keypoints": points,
+            **scores,
         })
     return people
 
@@ -418,7 +434,8 @@ def predict(filename: str):
                 # COCO v=1 (occluded) cannot be inferred reliably from confidence.
                 visible = 2 if confidence >= min_point_conf and x > 0 and y > 0 else 0
                 out.append([round(x, 2) if visible else 0, round(y, 2) if visible else 0, visible])
-            people.append({"id": len(people) + 1, "source": "yolo26", "keypoints": out})
+            people.append({"id": len(people) + 1, "source": "yolo26", "keypoints": out,
+                           "model_confidence": [float(p[2]) if len(p) > 2 and 0 <= p[2] <= 1 else None for p in points]})
         return jsonify({"people": people, "model": model_name, "device": device,
                         "width": int(result.orig_shape[1]), "height": int(result.orig_shape[0])})
     except Exception as exc:
@@ -481,8 +498,7 @@ def auto_label_frame(filename: str):
 @app.get("/api/export")
 def export_csv():
     with PROJECT_LOCK:
-        if not CSV_FILE.exists():
-            write_csv(load_project())
+        write_csv(load_project())
     return send_file(CSV_FILE, as_attachment=True, download_name="coco_keypoints.csv", mimetype="text/csv")
 
 

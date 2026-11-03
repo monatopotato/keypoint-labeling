@@ -2,8 +2,9 @@
 import math
 
 
-def tile_windows(width, height):
-    size = max(128, math.ceil(max(width, height) * 0.4))
+def tile_windows(width, height, size=None):
+    if size is None:
+        size = max(128, math.ceil(max(width, height) * 0.4))
 
     def starts(length):
         extent = min(size, length)
@@ -67,6 +68,7 @@ def result_candidates(result, offset, dimensions, point_conf, minimum_joints=0):
         if visible < minimum_joints:
             continue
         candidates.append({'keypoints': keypoints, 'score': score, 'visible': visible,
+                           'model_confidence': [float(p[2]) if len(p) > 2 and 0 <= p[2] <= 1 else None for p in points],
                            'box': [box[0] + ox, box[1] + oy, box[2] + ox, box[3] + oy]})
     return candidates
 
@@ -88,14 +90,15 @@ def predict_distant(model, path, device, confidence, point_conf):
         found = result_candidates(result, offset, image.size, point_conf, minimum_joints=4)
         candidates.extend({**c, 'view_id': view_id} for c in found)
     kept = merge_candidates(candidates)
-    people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': c['keypoints']} for i, c in enumerate(kept)]
+    people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': c['keypoints'],
+               'model_confidence': c['model_confidence']} for i, c in enumerate(kept)]
     return {'people': people, 'width': width, 'height': height, 'passes': len(windows) + 1}
 
 
-def person_window(box, width, height):
+def person_window(box, width, height, minimum_side=256):
     """Leave context around limbs and shift edge crops inside the source image."""
     left, top, right, bottom = box
-    side = max(256, math.ceil(1.6 * max(right - left, bottom - top)))
+    side = max(minimum_side, math.ceil(1.6 * max(right - left, bottom - top)))
     w, h = min(side, width), min(side, height)
     x = max(0, min(width - w, round((left + right - w) / 2)))
     y = max(0, min(height - h, round((top + bottom - h) / 2)))
@@ -112,29 +115,38 @@ def predict_person_zoom(detector, pose_model, path, device, confidence, point_co
     poses = []
     # Search both scales: a person detected in the wide shot must not prevent
     # discovery of a smaller person elsewhere in the frame.
-    detections = []
-    for window in [(0, 0, width, height), *tile_windows(width, height)]:
-        x, y = window[:2]
-        result = detector.predict(source=image.crop(window), classes=[0], imgsz=1280,
-                                  conf=confidence, device=device, verbose=False)[0]
-        passes += 1
-        for box, score in zip(result.boxes.xyxy.tolist(), result.boxes.conf.tolist()):
-            detections.append((score, [box[0] + x, box[1] + y, box[2] + x, box[3] + y]))
-    targets = []
-    for _, target in sorted(detections, key=lambda item: item[0], reverse=True):
-        if any(box_iou(target, other) >= .6 for other in targets):
-            continue
-        targets.append(target)
-        crop = person_window(target, width, height)
-        # Ultralytics undoes its input resize before returning crop coordinates.
-        result = pose_model.predict(source=image.crop(crop), imgsz=640, conf=.15,
-                                    device=device, verbose=False)[0]
-        passes += 1
-        candidates = result_candidates(result, crop[:2], image.size, point_conf, minimum_joints=4)
-        matches = [(box_iou(target, c['box']), c) for c in candidates]
-        if matches:
-            overlap, best = max(matches, key=lambda item: (item[0], item[1]['score']))
-            if overlap >= .25 and not any(box_iou(best['box'], p['box']) >= .75 for p in poses):
-                poses.append(best)
-    people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': p['keypoints']} for i, p in enumerate(poses)]
+    regular = [(0, 0, width, height), *tile_windows(width, height)]
+    # Aim for 256px tiles on HD frames. Bound the grid on very large sources.
+    longest = max(width, height)
+    fine_side = max(64, math.ceil(longest / 6), min(256, math.ceil(longest * .2)))
+    fine_windows = [w for w in tile_windows(width, height, fine_side) if w not in regular]
+    for fine, windows in [(False, regular), (True, fine_windows)]:
+        if poses:
+            break
+        detections = []
+        for window in windows:
+            x, y = window[:2]
+            result = detector.predict(source=image.crop(window), classes=[0], imgsz=1280,
+                                      conf=confidence, device=device, verbose=False)[0]
+            passes += 1
+            for box, score in zip(result.boxes.xyxy.tolist(), result.boxes.conf.tolist()):
+                detections.append((score, [box[0] + x, box[1] + y, box[2] + x, box[3] + y]))
+        targets = []
+        for _, target in sorted(detections, key=lambda item: item[0], reverse=True):
+            if any(box_iou(target, other) >= .6 for other in targets):
+                continue
+            targets.append(target)
+            crop = person_window(target, width, height, minimum_side=128 if fine else 256)
+            # Ultralytics undoes its input resize before returning crop coordinates.
+            result = pose_model.predict(source=image.crop(crop), imgsz=640, conf=.15,
+                                        device=device, verbose=False)[0]
+            passes += 1
+            candidates = result_candidates(result, crop[:2], image.size, point_conf, minimum_joints=6 if fine else 4)
+            matches = [(box_iou(target, c['box']), c) for c in candidates]
+            if matches:
+                overlap, best = max(matches, key=lambda item: (item[0], item[1]['score']))
+                if overlap >= .25 and not any(box_iou(best['box'], p['box']) >= .75 for p in poses):
+                    poses.append(best)
+    people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': p['keypoints'],
+               'model_confidence': p['model_confidence']} for i, p in enumerate(poses)]
     return {'people': people, 'width': width, 'height': height, 'passes': passes}

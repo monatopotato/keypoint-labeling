@@ -37,6 +37,8 @@ If you use **WSL**, use `./run.sh` in the WSL shell. To import by folder path, u
 
 ### Small / distant people
 
+If **Person zoom** finds no usable pose, it automatically retries with smaller overlapping tiles in both single-frame and batch labeling. On 1280×800 frames it enlarges 256×256 tiles to 1280×1280, so a 20×50-pixel person spans about 100×250 input pixels. The pose check uses a tighter crop and requires six confident joints matching the detector box. A failed batch retry leaves the frame in **Unlabeled**. Empty scenes take longer because the detector searches every tile.
+
 **Person zoom** is the default detection method for single-frame and automatic labeling. The separate YOLO26s object detector downloads on first use and searches for the COCO person class. The app pads each person box, runs the selected pose model at input size 640 on that crop, and matches the pose to the detector box. The pose model returns coordinates in crop pixels. Adding the crop's left and top offsets puts the joints back on the original image for editing and CSV export. The detector also searches overlapping tiles so that a nearby detection does not prevent finding a distant person elsewhere. The person-confidence slider applies to the detector and the keypoint-confidence slider applies to joints.
 
 **Distant people** runs the full image plus overlapping square crops, each at YOLO input size 1280. **Standard** runs only the full image. On a 1280×800 frame, distant mode uses six 512×512 crops plus the full image (7 predictions). It is substantially slower on CPU; try a few frames before processing a large dataset.
@@ -119,7 +121,7 @@ filename,frame_index,annotation_status,person_id,source,num_keypoints,image_widt
 nose_x,nose_y,nose_v,left_eye_x,left_eye_y,left_eye_v,...,right_ankle_x,right_ankle_y,right_ankle_v
 ```
 
-That is 8 metadata columns + 17×3 = **59 columns**. All X/Y coordinates use **pixel positions in the original full-resolution image**, not normalized values or positions on the screen.
+The first 59 columns contain metadata, coordinates, and visibility. The CSV appends two scores per joint (93 columns total): `<joint>_model_confidence` holds the original pose-model score, including scores below the visibility threshold, and `<joint>_manual_confidence` holds the user's optional rating. Both export on a 0–1 scale. Missing scores, including scores unavailable in older projects, export as blank. In the inspector, select a joint to see its original YOLO score and enter or clear a manual rating from 0–100%. All X/Y coordinates use original full-resolution image pixels.
 
 CSV keypoint triplets match [COCO person-keypoint ordering](https://datatorch.io/resources/coco-keypoints). Their fixed order is:
 
