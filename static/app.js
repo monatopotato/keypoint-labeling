@@ -199,18 +199,21 @@ async function navigateTo(index) {
     }
     const name=S.frames[index].name;
     const [anns, loadedImg]=await Promise.all([api(annUrl(name)), preloadImage(imageUrl(name))]);
-    S.dragging=null;S.index=index;S.people=deep(anns.people||[]);
-    S.width=loadedImg.naturalWidth;S.height=loadedImg.naturalHeight;
-    S.selectedPerson=S.people.length?0:-1;S.selectedPoint=0;
-    S.undo=[];S.redo=[];S.placeMode=false;S.zoom=1;S.dirty=false;S.revision=0;
-    el('frameImage').src=loadedImg.src;
-    renderFrameList();scrollActiveIntoView();renderHeader();renderPeople();fitSurface();renderOverlay();showSaveStatus();
+    displayFrame(index,loadedImg,anns.people||[]);
   }catch(e){toast(e.message,true)}finally{
     S.navigating=false;
     updateButtons();
     const pending=S.pendingIndex;S.pendingIndex=null;
     if(pending!==null && pending!==S.index) requestNavigation(pending);
   }
+}
+function displayFrame(index,loadedImg,people) {
+  S.dragging=null;S.index=index;S.people=deep(people);
+  S.width=loadedImg.naturalWidth;S.height=loadedImg.naturalHeight;
+  S.selectedPerson=S.people.length?0:-1;S.selectedPoint=0;
+  S.undo=[];S.redo=[];S.placeMode=false;S.zoom=1;S.dirty=false;S.revision=0;
+  el('frameImage').src=loadedImg.src;
+  renderFrameList();scrollActiveIntoView();renderHeader();renderPeople();fitSurface();showSaveStatus();
 }
 function preloadImage(src) {return new Promise((resolve,reject)=>{
   const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('Could not open image. Check whether its original file still exists.'));img.src=src;
@@ -388,7 +391,7 @@ async function predictPose() {
   const current=frame().name;
   S.busy=true;el('busyOverlay').classList.remove('hidden');
   el('busyTitle').textContent='Running YOLO pose estimation';
-  el('busySubtitle').textContent=el('detectionMode').value==='distant'?'Scanning the full image and overlapping enlarged crops. This can take a minute or more on CPU.':'First run downloads model weights. The x model is large and may be slow on CPU.';
+  el('busySubtitle').textContent=predictionHint(el('detectionMode').value);
   updateButtons();
   try {
     const result=await api('/api/predict/'+encodeURIComponent(current),jsonOptions('POST',{
@@ -413,16 +416,21 @@ function predictionSettings() {
     detection_mode:el('detectionMode').value,confidence:Number(el('personThreshold').value),
     keypoint_confidence:Number(el('pointThreshold').value)};
 }
+function predictionHint(mode) {
+  if(mode==='person_zoom')return 'Detecting people and estimating joints in enlarged crops. The first run may download detector weights.';
+  if(mode==='distant')return 'Scanning enlarged crops. Each frame can take a minute or more on CPU.';
+  return 'First use may download the model weights.';
+}
 async function runAutomaticLabels() {
   if(S.busy||S.importing||S.navigating||!frame())return;
   S.batch=true;S.batchStop=false;S.busy=true;S.pendingIndex=null;
-  const currentIndex=S.index;
+  const editHint=el('stageHint').textContent;
   const settings={folder:S.folder,...predictionSettings()};
   let completed=0,labeled=0,failed=0,consecutiveErrors=0,total=0;
   el('batchStopBtn').classList.remove('hidden');el('batchStopBtn').disabled=false;
   el('batchStopBtn').textContent='Stop after current frame';
   el('batchProgress').classList.remove('hidden');el('batchProgress').value=0;
-  el('busyOverlay').classList.remove('hidden');el('busyTitle').textContent='Automatic labeling';
+  el('stageHint').textContent='Waiting for the first batch result…';
   updateButtons();
   try {
     await saveFrame();
@@ -431,13 +439,19 @@ async function runAutomaticLabels() {
     for(const f of queue){
       if(S.batchStop)break;
       const progress=`${completed} / ${total} processed · ${labeled} labeled · ${failed} errors`;
-      el('batchStatus').textContent=progress;
-      el('busySubtitle').textContent=`${progress}. Processing ${f.name}. `+(settings.detection_mode==='distant'?'Scanning enlarged crops; each frame can take a minute or more on CPU.':'First use may download the model.');
+      el('batchStatus').textContent=`${progress}. Processing ${f.name}.`;
       try {
         const result=await api('/api/auto-label/'+encodeURIComponent(f.name),jsonOptions('POST',settings));
         if(!result.skipped){
           f.status=result.status;f.people=result.people.length;f.auto_note=result.auto_note;
           if(result.status==='labeled')labeled++;
+          try {
+            const image=await preloadImage(imageUrl(f.name));
+            displayFrame(S.frames.indexOf(f),image,result.people);
+            el('stageHint').textContent=result.people.length?'Live preview · saved keypoints':'Live preview · no confident keypoints';
+          } catch(previewError) {
+            el('stageHint').textContent='Preview unavailable for '+f.name;
+          }
         }
         consecutiveErrors=0;
       } catch(e){
@@ -453,11 +467,13 @@ async function runAutomaticLabels() {
     toast(e.message,true);
   } finally {
     S.batch=false;S.busy=false;el('batchStopBtn').classList.add('hidden');
+    el('stageHint').textContent=editHint;
     el('busyOverlay').classList.add('hidden');
     try {
       const result=await api('/api/project');
       if(result.folder!==S.folder || result.mode!==S.mode)await adoptProject(result);
-      else {
+      else if(!S.dirty) {
+        const currentIndex=S.index;
         S.frames=result.frames;S.index=-1;
         await navigateTo(Math.min(currentIndex,S.frames.length-1));
       }
@@ -594,10 +610,12 @@ function wireEvents() {
   el('pointThreshold').addEventListener('input',evt=>{el('thresholdValue').textContent=Number(evt.target.value).toFixed(2)});
   el('personThreshold').addEventListener('input',evt=>{el('personThresholdValue').textContent=Number(evt.target.value).toFixed(2)});
   el('detectionMode').addEventListener('change',()=>{
+    el('batchMethod').textContent=el('detectionMode').selectedOptions[0].textContent;
     const distant=el('detectionMode').value==='distant';
-    el('personThreshold').value=distant?'0.15':'0.25';
+    el('personThreshold').value=el('detectionMode').value==='standard'?'0.25':'0.15';
     el('personThresholdValue').textContent=Number(el('personThreshold').value).toFixed(2);
     el('detectionHelp').textContent=distant?'Enlarges overlapping crops to find small people. Slower on CPU; review predictions for false detections. Requires 4 confident joints; weak detections need 12 joints and agreement across crops.':'One full-image pass. Faster, but may miss small or distant people.';
+    if(el('detectionMode').value==='person_zoom')el('detectionHelp').textContent='Detects each person, enlarges their crop for pose estimation, and places joints on the original frame.';
   });
   el('poseOverlay').addEventListener('pointerdown',mouseDown);
   el('poseOverlay').addEventListener('contextmenu',hidePointOnRightClick);
@@ -634,6 +652,7 @@ function wireEvents() {
 }
 
 wireEvents();
+el('batchMethod').textContent=el('detectionMode').selectedOptions[0].textContent;
 api('/api/devices').then(info=>{
   el('deviceStatus').textContent=`PyTorch ${info.torch_version} · `+(info.cuda_available?`Auto uses ${info.gpu_name}`:'Auto uses CPU. CUDA is unavailable.');
   el('deviceSelect').querySelector('[value="cuda"]').disabled=!info.cuda_available;

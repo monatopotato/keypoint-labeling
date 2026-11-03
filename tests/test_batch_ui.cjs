@@ -16,6 +16,8 @@ const root = path.resolve(__dirname, '..');
     }));
     const people = [{id: 1, source: 'yolo26', keypoints: Array.from({length: 17}, () => [10, 20, 2])}];
     const requests = [];
+    let releaseSecond;
+    const secondFrame = new Promise(resolve => { releaseSecond=resolve; });
     let delay = 0;
     await page.route('http://poseframe.test/**', async route => {
       const url = new URL(route.request().url());
@@ -27,9 +29,10 @@ const root = path.resolve(__dirname, '..');
         return json({people: f.people ? people : [], status: f.status});
       }
       if (url.pathname.startsWith('/api/auto-label/')) {
-        assert.equal(route.request().postDataJSON().detection_mode, 'distant');
+        assert.equal(route.request().postDataJSON().detection_mode, 'person_zoom');
         assert.equal(route.request().postDataJSON().confidence, 0.15);
         const name = url.pathname.split('/').pop(); requests.push(name);
+        if(name==='empty.jpg') await secondFrame;
         if(delay) await new Promise(resolve => setTimeout(resolve, delay));
         const f = frames.find(f => f.name === name);
         if(name === 'broken.jpg') {f.auto_note='Cannot read image'; return json({error: f.auto_note}, 500);}
@@ -43,7 +46,17 @@ const root = path.resolve(__dirname, '..');
       return route.fulfill({contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: fs.readFileSync(path.join(root,file))});
     });
     await page.goto('http://poseframe.test/');
+    assert.match(await page.locator('#batchMethod').innerText(), /Person zoom/);
+    await page.locator('#detectionMode').selectOption('standard');
+    assert.match(await page.locator('#batchMethod').innerText(), /Standard/);
+    await page.locator('#detectionMode').selectOption('person_zoom');
     await page.locator('#batchAutoBtn').click();
+    await page.waitForFunction(() => document.querySelector('#batchStatus').textContent.includes('Processing empty.jpg'));
+    assert.equal(await page.locator('#busyOverlay').isVisible(), false);
+    assert.equal(await page.locator('#poseOverlay .pose-point').count(), 17);
+    assert.match(await page.locator('#frameImage').getAttribute('src'), /detected\.jpg$/);
+    assert.equal(await page.locator('#saveBtn').isDisabled(), true);
+    releaseSecond();
     await page.waitForFunction(() => document.querySelector('#batchStatus').textContent.startsWith('Finished'));
     await page.waitForFunction(() => document.querySelector('#unlabeledCount').textContent === '2');
     assert.deepEqual(requests, ['detected.jpg','empty.jpg','broken.jpg']);

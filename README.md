@@ -37,7 +37,9 @@ If you use **WSL**, use `./run.sh` in the WSL shell. To import by folder path, u
 
 ### Small / distant people
 
-The **Detection method** selector defaults to **Distant people**, for single-frame and automatic labeling. It runs the full image plus overlapping square crops, each at YOLO input size 1280. **Standard** runs only the full image. On a 1280×800 frame, distant mode uses six 512×512 crops plus the full image (7 predictions). It is substantially slower on CPU; try a few frames before processing a large dataset.
+**Person zoom** is the default detection method for single-frame and automatic labeling. The separate YOLO26s object detector downloads on first use and searches for the COCO person class. The app pads each person box, runs the selected pose model at input size 640 on that crop, and matches the pose to the detector box. The pose model returns coordinates in crop pixels. Adding the crop's left and top offsets puts the joints back on the original image for editing and CSV export. The detector also searches overlapping tiles so that a nearby detection does not prevent finding a distant person elsewhere. The person-confidence slider applies to the detector and the keypoint-confidence slider applies to joints.
+
+**Distant people** runs the full image plus overlapping square crops, each at YOLO input size 1280. **Standard** runs only the full image. On a 1280×800 frame, distant mode uses six 512×512 crops plus the full image (7 predictions). It is substantially slower on CPU; try a few frames before processing a large dataset.
 
 The person occupies about `1280 / 512 = 2.5` times as many input pixels vertically in a crop as in the full-width image. This magnifies existing information; it cannot recover details missing from the source. Crops overlap by at least 25% so a person on a tile boundary can be detected in a neighboring crop. YOLO returns coordinates in crop pixels, which are mapped back using `x_original = x_crop + crop_left`, `y_original = y_crop + crop_top`. Missing joints remain `[0,0,0]`.
 

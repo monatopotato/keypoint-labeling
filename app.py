@@ -13,7 +13,7 @@ import webbrowser
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from pose_inference import predict_distant
+from pose_inference import predict_distant, predict_person_zoom
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
 
@@ -369,14 +369,14 @@ def predict(filename: str):
     model_name = str(body.get("model", "yolo26x-pose.pt"))
     requested_device = body.get("device", "auto")
     detection_mode = body.get("detection_mode", "standard")
-    if detection_mode not in ("standard", "distant"):
-        return jsonify({"error": "Detection mode must be standard or distant"}), 400
+    if detection_mode not in ("standard", "distant", "person_zoom"):
+        return jsonify({"error": "Unknown detection method"}), 400
     if requested_device not in ("auto", "cpu", "cuda"):
         return jsonify({"error": "Device must be auto, cpu or cuda"}), 400
     if model_name not in MODELS:
         return jsonify({"error": "Unsupported pose model"}), 400
     try:
-        min_conf = float(body.get("confidence", 0.15 if detection_mode == "distant" else 0.25))
+        min_conf = float(body.get("confidence", 0.25 if detection_mode == "standard" else 0.15))
         min_point_conf = float(body.get("keypoint_confidence", 0.45))
         if not (0 <= min_conf <= 1 and 0 <= min_point_conf <= 1):
             raise ValueError()
@@ -396,6 +396,11 @@ def predict(filename: str):
                 return jsonify({"error": str(exc)}), 503
             # Separate cached models prevent a CPU/GPU switch from reusing a predictor on the wrong device.
             model = load_yolo_model(model_name, device)
+            if detection_mode == "person_zoom":
+                detector = load_yolo_model("yolo26s.pt", device)
+                prediction = predict_person_zoom(detector, model, path, device, min_conf, min_point_conf)
+                return jsonify({**prediction, "model": model_name, "detector": "yolo26s.pt",
+                                "device": device, "detection_mode": detection_mode})
             if detection_mode == "distant":
                 prediction = predict_distant(model, path, device, min_conf, min_point_conf)
                 return jsonify({**prediction, "model": model_name, "device": device, "detection_mode": detection_mode})

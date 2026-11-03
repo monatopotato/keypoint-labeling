@@ -5,4 +5,6 @@ data/
 .DS_Store
 Ultralytics/
 yolo*-pose.pt
+yolo26s.pt
+.yolo26s.pt.*.part
 .yolo*-pose.pt.*.part

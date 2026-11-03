@@ -30,6 +30,7 @@
         <div class="filter-tabs" role="group" aria-label="Filter frames"><button data-filter="all" class="active">All</button><button data-filter="unlabeled">Unlabeled</button><button data-filter="labeled">Done</button></div>
         <section class="batch-panel" aria-label="Automatic labeling">
           <button id="batchAutoBtn" class="btn btn-glow full-width">✦ Auto-label unlabeled frames</button>
+          <p>Batch method: <strong id="batchMethod"></strong></p>
           <button id="batchStopBtn" class="btn btn-quiet full-width hidden">Stop after current frame</button>
           <p id="batchStatus" role="status" aria-live="polite">Saves each frame. Keep this tab open during the run.</p>
           <progress id="batchProgress" class="hidden" max="1" value="0" aria-label="Automatic labeling progress"></progress>
@@ -78,8 +79,8 @@
           <select id="deviceSelect" class="model-select"><option value="auto">Auto · GPU when available</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU · CUDA</option></select>
           <p id="deviceStatus" class="model-help">Checking PyTorch devices…</p>
           <label class="field-label threshold-title" for="detectionMode">DETECTION METHOD</label>
-          <select id="detectionMode" class="model-select"><option value="standard">Standard · full image</option><option value="distant" selected>Distant people · overlapping crops</option></select>
-          <p id="detectionHelp" class="model-help">Enlarges overlapping crops to find small people. Slower on CPU; review predictions for false detections. Requires 4 confident joints; weak detections need 12 joints and agreement across crops.</p>
+          <select id="detectionMode" class="model-select"><option value="person_zoom" selected>Person zoom · detect then pose</option><option value="standard">Standard · full image</option><option value="distant">Distant people · overlapping crops</option></select>
+          <p id="detectionHelp" class="model-help">Detects each person, enlarges their crop for pose estimation, and places joints on the original frame.</p>
           <label class="field-label threshold-title" for="personThreshold">PERSON CONFIDENCE <span id="personThresholdValue">0.15</span></label>
           <input id="personThreshold" class="wide-range" type="range" min="0.05" max="0.75" step="0.05" value="0.15"/>
           <label class="field-label" for="modelSelect">POSE MODEL</label><select id="modelSelect" class="model-select"><option value="yolo26x-pose.pt">YOLO26x Pose · Highest quality</option><option value="yolo26l-pose.pt">YOLO26l Pose · Large</option><option value="yolo26m-pose.pt">YOLO26m Pose · Medium</option><option value="yolo26s-pose.pt">YOLO26s Pose · Small</option><option value="yolo26n-pose.pt">YOLO26n Pose · Fastest</option></select>

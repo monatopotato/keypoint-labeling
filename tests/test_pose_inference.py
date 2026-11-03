@@ -1,11 +1,46 @@
 import unittest
+from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from pose_inference import box_iou, merge_candidates, result_candidates, tile_windows
+from pose_inference import box_iou, merge_candidates, result_candidates, tile_windows, predict_person_zoom
 
 
 class DistantPoseTests(unittest.TestCase):
+    def test_person_zoom_keeps_tile_only_subject_after_full_frame_detection(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Optional YOLO image dependencies not installed')
+        picture = BytesIO()
+        Image.new('RGB', (640, 400)).save(picture, format='PNG')
+        picture.seek(0)
+
+        def detected(box):
+            result = Mock()
+            result.boxes.xyxy.tolist.return_value = [box]
+            result.boxes.conf.tolist.return_value = [.9]
+            return [result]
+
+        def posed(box, joint):
+            result = Mock()
+            result.boxes.xyxy.cpu.return_value.tolist.return_value = [box]
+            result.boxes.conf.cpu.return_value.tolist.return_value = [.9]
+            result.keypoints.data.cpu.return_value.tolist.return_value = [[joint] * 16 + [[0,0,0]]]
+            return [result]
+
+        detector, pose = Mock(), Mock()
+        detector.predict.side_effect = [detected([30,30,60,80]), detected([66,72,96,132])]
+        # Second target in original coordinates: [450,200,480,260].
+        # Its 256-square pose crop starts at (337,102).
+        pose.predict.side_effect = [posed([30,30,60,80], [40,50,.9]), posed([113,98,143,158], [123,128,.9])]
+        with patch('pose_inference.tile_windows', return_value=[(384,128,640,384)]):
+            result = predict_person_zoom(detector, pose, picture, 'cpu', .15, .45)
+        points = [p['keypoints'] for p in result['people']]
+        self.assertCountEqual([p[0] for p in points], [[40,50,2], [460,230,2]])
+        self.assertTrue(all(p[-1] == [0,0,0] for p in points))
+        self.assertEqual(result['passes'], 4)
+
     def test_tiles_cover_frame_with_overlap_and_bounded_cost(self):
         windows = tile_windows(1280, 800)
         self.assertEqual(len(windows), 6)

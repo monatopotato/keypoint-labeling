@@ -90,3 +90,51 @@ def predict_distant(model, path, device, confidence, point_conf):
     kept = merge_candidates(candidates)
     people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': c['keypoints']} for i, c in enumerate(kept)]
     return {'people': people, 'width': width, 'height': height, 'passes': len(windows) + 1}
+
+
+def person_window(box, width, height):
+    """Leave context around limbs and shift edge crops inside the source image."""
+    left, top, right, bottom = box
+    side = max(256, math.ceil(1.6 * max(right - left, bottom - top)))
+    w, h = min(side, width), min(side, height)
+    x = max(0, min(width - w, round((left + right - w) / 2)))
+    y = max(0, min(height - h, round((top + bottom - h) / 2)))
+    return x, y, x + w, y + h
+
+
+def predict_person_zoom(detector, pose_model, path, device, confidence, point_conf):
+    from PIL import Image
+
+    with Image.open(path) as source:
+        image = source.convert('RGB')
+    width, height = image.size
+    passes = 0
+    poses = []
+    # Search both scales: a person detected in the wide shot must not prevent
+    # discovery of a smaller person elsewhere in the frame.
+    detections = []
+    for window in [(0, 0, width, height), *tile_windows(width, height)]:
+        x, y = window[:2]
+        result = detector.predict(source=image.crop(window), classes=[0], imgsz=1280,
+                                  conf=confidence, device=device, verbose=False)[0]
+        passes += 1
+        for box, score in zip(result.boxes.xyxy.tolist(), result.boxes.conf.tolist()):
+            detections.append((score, [box[0] + x, box[1] + y, box[2] + x, box[3] + y]))
+    targets = []
+    for _, target in sorted(detections, key=lambda item: item[0], reverse=True):
+        if any(box_iou(target, other) >= .6 for other in targets):
+            continue
+        targets.append(target)
+        crop = person_window(target, width, height)
+        # Ultralytics undoes its input resize before returning crop coordinates.
+        result = pose_model.predict(source=image.crop(crop), imgsz=640, conf=.15,
+                                    device=device, verbose=False)[0]
+        passes += 1
+        candidates = result_candidates(result, crop[:2], image.size, point_conf, minimum_joints=4)
+        matches = [(box_iou(target, c['box']), c) for c in candidates]
+        if matches:
+            overlap, best = max(matches, key=lambda item: (item[0], item[1]['score']))
+            if overlap >= .25 and not any(box_iou(best['box'], p['box']) >= .75 for p in poses):
+                poses.append(best)
+    people = [{'id': i + 1, 'source': 'yolo26', 'keypoints': p['keypoints']} for i, p in enumerate(poses)]
+    return {'people': people, 'width': width, 'height': height, 'passes': passes}
