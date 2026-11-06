@@ -105,7 +105,7 @@ def person_window(box, width, height, minimum_side=256):
     return x, y, x + w, y + h
 
 
-def predict_person_zoom(detector, pose_model, path, device, confidence, point_conf):
+def predict_person_zoom(detector, pose_model, path, device, confidence, point_conf, fast=False):
     from PIL import Image
 
     with Image.open(path) as source:
@@ -120,7 +120,9 @@ def predict_person_zoom(detector, pose_model, path, device, confidence, point_co
     longest = max(width, height)
     fine_side = max(64, math.ceil(longest / 6), min(256, math.ceil(longest * .2)))
     fine_windows = [w for w in tile_windows(width, height, fine_side) if w not in regular]
-    for fine, windows in [(False, regular), (True, fine_windows)]:
+    # Fast mode checks the wide shot first and only pays for tiles on a miss.
+    stages = [(False, regular[:1]), (False, regular[1:])] if fast else [(False, regular)]
+    for fine, windows in [*stages, (True, fine_windows)]:
         if poses:
             break
         detections = []

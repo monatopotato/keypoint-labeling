@@ -4,6 +4,7 @@ import io
 import os
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import Mock, patch
 from pathlib import Path
 
@@ -14,6 +15,25 @@ from app import app, filename_sort_key, KEYPOINTS, CSV_FIELDS, PROJECT_FILE, res
 
 
 class PoseFrameTests(unittest.TestCase):
+    def test_zip_import_nested_frames_and_failed_replacement(self):
+        payload=io.BytesIO()
+        with zipfile.ZipFile(payload,'w') as archive:
+            archive.writestr('set/frame_10.jpg', b'ten')
+            archive.writestr('other/frame_2.png', b'first')
+            archive.writestr('again/frame_2.png', b'second')
+            archive.writestr('__MACOSX/._frame_2.png', b'metadata')
+            archive.writestr('../outside.png', b'invalid')
+        payload.seek(0)
+        response=self.client.post('/api/import/zip',data={'archive':(payload,'images.zip')})
+        self.assertEqual(response.status_code,200)
+        names=[f['name'] for f in response.json['frames']]
+        self.assertEqual(names,['frame_2.png','frame_2_2.png','frame_10.jpg'])
+        with self.client.get('/api/image/frame_2_2.png') as image:
+            self.assertEqual(image.data,b'second')
+        rejected=self.client.post('/api/import/zip',data={'archive':(io.BytesIO(b'broken'),'bad.zip')})
+        self.assertEqual(rejected.status_code,400)
+        self.assertEqual(self.client.get('/api/project').json['frames'],response.json['frames'])
+
     def setUp(self):
         PROJECT_FILE.unlink(missing_ok=True)
         self.client=app.test_client()

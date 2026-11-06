@@ -10,3 +10,6 @@ html,body{height:100%;overflow:hidden}
 .frame-row{height:61px;margin:0 0 3px;flex-shrink:0}.virtual-spacer{width:100%;pointer-events:none;flex-shrink:0}
 
 .batch-panel{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:9px}.batch-panel .btn{font-size:11px;padding:0 6px;white-space:normal;height:auto;min-height:36px}.batch-panel p{font-size:11px;line-height:1.5;color:var(--muted);margin:0;overflow-wrap:anywhere}.batch-panel progress{width:100%;height:7px;accent-color:var(--accent)}.batch-panel .subtle-link{text-align:left;line-height:1.5}
+
+.csv-import{border:1px solid #344656;border-radius:9px;background:#13202d;padding:13px;margin:0 0 16px}.csv-import input{width:100%;color:#a9bbc6;font-size:11px}.csv-import .modal-note{margin-top:8px}
+

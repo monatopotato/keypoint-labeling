@@ -28,7 +28,7 @@ class DistantPoseTests(unittest.TestCase):
         detector.predict.side_effect = [[empty], [empty], [hit]]
         model.predict.return_value = [pose]
         with patch('pose_inference.tile_windows', side_effect=[[(0,0,256,256)], [(400,200,528,328)]]):
-            result = predict_person_zoom(detector, model, picture, 'cpu', .15, .45)
+            result = predict_person_zoom(detector, model, picture, 'cpu', .15, .45, fast=True)
         self.assertEqual(model.predict.call_args.kwargs['source'].size, (128,128))
         self.assertEqual(result['people'][0]['keypoints'][0], [430,230,2])
         self.assertEqual(result['people'][0]['keypoints'][-1], [0,0,0])
@@ -66,6 +66,11 @@ class DistantPoseTests(unittest.TestCase):
         self.assertCountEqual([p[0] for p in points], [[40,50,2], [460,230,2]])
         self.assertTrue(all(p[-1] == [0,0,0] for p in points))
         self.assertEqual(result['passes'], 4)
+        detector.predict.side_effect = [detected([30,30,60,80])]
+        pose.predict.side_effect = [posed([30,30,60,80], [40,50,.9])]
+        fast = predict_person_zoom(detector, pose, BytesIO(picture.getvalue()), 'cpu', .15, .45, fast=True)
+        self.assertEqual(fast['passes'], 2)
+        self.assertEqual(fast['people'][0]['keypoints'][0], [40,50,2])
 
     def test_tiles_cover_frame_with_overlap_and_bounded_cost(self):
         windows = tile_windows(1280, 800)

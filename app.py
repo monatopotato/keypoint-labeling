@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 import threading
+import tempfile
+import zipfile
 import webbrowser
 from functools import lru_cache
 from pathlib import Path
@@ -228,6 +230,72 @@ def project_details():
         return jsonify(snapshot(load_project()))
 
 
+@app.post("/api/import/zip")
+def import_zip():
+    uploaded = request.files.get("archive")
+    if not uploaded:
+        return jsonify({"error": "Choose a ZIP containing image frames."}), 400
+    DATA.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(dir=DATA, prefix="zip-import-") as temp:
+            staged = Path(temp) / "new"
+            staged.mkdir()
+            with zipfile.ZipFile(uploaded.stream) as archive:
+                entries = archive.infolist()
+                if len(entries) > 30000:
+                    raise ValueError("ZIP exceeds 30,000 entries.")
+                total = 0
+                used = set()
+                for entry in entries:
+                    parts = entry.filename.replace("\\", "/").split("/")
+                    if entry.is_dir() or any(p.startswith(".") or p == "__MACOSX" for p in parts):
+                        continue
+                    # Flatten member paths. Only this sanitized basename is ever written.
+                    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", parts[-1]).rstrip(" .")
+                    suffix = Path(name).suffix
+                    if suffix.lower() not in IMAGE_EXTS:
+                        continue
+                    stem = Path(name).stem[:160]
+                    if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", stem, re.I):
+                        stem = "_" + stem
+                    total += entry.file_size
+                    if total > 4 * 1024**3:
+                        raise ValueError("Images in this ZIP exceed 4 GiB unpacked.")
+                    name = stem + suffix
+                    n = 2
+                    while name.casefold() in used:
+                        name = f"{stem}_{n}{suffix}"
+                        n += 1
+                    used.add(name.casefold())
+                    with archive.open(entry) as source, (staged / name).open("xb") as target:
+                        shutil.copyfileobj(source, target)
+            names = scan_frames(staged)
+            if not names:
+                raise ValueError("No JPG, PNG, WEBP or BMP images found in this ZIP.")
+            with PROJECT_LOCK:
+                old = load_project()
+                backup = Path(temp) / "previous"
+                if UPLOAD_DIR.exists():
+                    UPLOAD_DIR.rename(backup)
+                try:
+                    staged.rename(UPLOAD_DIR)
+                    project = {"folder": str(UPLOAD_DIR), "mode": "upload", "frames": names, "annotations": {}}
+                    write_csv(project)
+                    write_project(project)
+                except OSError:
+                    if not staged.exists():
+                        UPLOAD_DIR.rename(staged)
+                    if backup.exists():
+                        backup.rename(UPLOAD_DIR)
+                    write_csv(old)
+                    raise
+                return jsonify(snapshot(project))
+    except (zipfile.BadZipFile, ValueError, RuntimeError) as exc:
+        return jsonify({"error": f"Could not import ZIP: {exc}"}), 400
+    except OSError as exc:
+        return jsonify({"error": f"Could not store image frames: {exc}"}), 500
+
+
 @app.post("/api/import/start")
 def import_start():
     with PROJECT_LOCK:
@@ -308,6 +376,102 @@ def import_existing_path():
         return jsonify(snapshot(project))
 
 
+@app.post("/api/import/annotations-csv")
+def import_annotations_csv():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "Choose an annotation CSV file."}), 400
+    try:
+        text = uploaded.stream.read().decode("utf-8-sig")
+        reader = csv.DictReader(text.splitlines())
+        required = {"filename"} | {f"{point}_{part}" for point in KEYPOINTS for part in ("x", "y", "v")}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError("CSV must include filename and COCO-17 x, y and v columns for all keypoints.")
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        dimensions: dict[str, tuple[int, int]] = {}
+        frame_indices: dict[str, int] = {}
+        for row_number, row in enumerate(reader, start=2):
+            name = Path((row.get("filename") or "").replace("\\", "/")).name
+            if not name:
+                continue
+            points = []
+            for label in KEYPOINTS:
+                try:
+                    x = float(row.get(f"{label}_x") or 0)
+                    y = float(row.get(f"{label}_y") or 0)
+                    v_raw = float(row.get(f"{label}_v") or 0)
+                    if not (math.isfinite(x) and math.isfinite(y) and v_raw in (0, 1, 2)):
+                        raise ValueError
+                except (TypeError, ValueError):
+                    raise ValueError(f"Invalid keypoint values on CSV row {row_number}.") from None
+                points.append([x, y, int(v_raw)])
+            grouped.setdefault(name, []).append({"keypoints": points, "source": "manual"})
+            index_text = (row.get("frame_index") or "").strip()
+            if index_text:
+                try:
+                    frame_index = int(index_text)
+                except ValueError:
+                    raise ValueError(f"Invalid frame_index on CSV row {row_number}.") from None
+                if name in frame_indices and frame_indices[name] != frame_index:
+                    raise ValueError(f"Inconsistent frame_index for {name}.")
+                frame_indices[name] = frame_index
+            try:
+                width, height = int(float(row.get("image_width") or 0)), int(float(row.get("image_height") or 0))
+                if width > 0 and height > 0:
+                    dimensions[name] = (width, height)
+            except ValueError:
+                pass
+    except (UnicodeDecodeError, ValueError, csv.Error) as exc:
+        return jsonify({"error": f"Could not read annotation CSV: {exc}"}), 400
+
+    with PROJECT_LOCK:
+        project = load_project()
+        if not project.get("frames"):
+            return jsonify({"error": "Import an image folder or ZIP before importing keypoints."}), 409
+        frame_set = set(project["frames"])
+        # Exact filenames are the safest match. For extracted videos whose frame
+        # names differ from the annotation CSV, use its explicit frame_index.
+        mapped = {name: name for name in grouped if name in frame_set}
+        indexed_values = list(frame_indices.values())
+        index_base = 0 if 0 in indexed_values else 1
+        for source_name in grouped:
+            if source_name in mapped or source_name not in frame_indices:
+                continue
+            target_index = frame_indices[source_name] - index_base
+            if 0 <= target_index < len(project["frames"]):
+                mapped[source_name] = project["frames"][target_index]
+        mapped_grouped: dict[str, list[dict[str, Any]]] = {}
+        mapped_dimensions: dict[str, tuple[int, int]] = {}
+        for source_name, target_name in mapped.items():
+            mapped_grouped.setdefault(target_name, []).extend(grouped[source_name])
+            if source_name in dimensions:
+                mapped_dimensions[target_name] = dimensions[source_name]
+        matched = set(mapped_grouped)
+        if not matched:
+            return jsonify({"error": "CSV filenames do not match, and its frame_index values cannot be mapped to frames in the current project."}), 400
+        for name in matched:
+            entry = project["annotations"].get(name, {})
+            width, height = mapped_dimensions.get(name, (entry.get("width", 0), entry.get("height", 0)))
+            if not width or not height:
+                # Read dimensions directly from the imported image when the CSV omits them.
+                try:
+                    from PIL import Image
+                    with Image.open(get_frame_path(project, name)) as image:
+                        width, height = image.size
+                except Exception:
+                    return jsonify({"error": f"Image dimensions are unavailable for {name}."}), 400
+            try:
+                people = validate_people(mapped_grouped[name], width, height)
+            except ValueError as exc:
+                return jsonify({"error": f"Invalid annotations for {name}: {exc}"}), 400
+            project["annotations"][name] = {"status": "labeled" if people else "reviewed_empty", "width": width, "height": height, "people": people}
+        write_project(project)
+        write_csv(project)
+        result = snapshot(project)
+        result.update({"matched": len(matched), "unmatched": len(grouped) - len(mapped)})
+        return jsonify(result)
+
+
 @app.get("/api/image/<path:filename>")
 def serve_image(filename: str):
     with PROJECT_LOCK:
@@ -385,7 +549,7 @@ def predict(filename: str):
     model_name = str(body.get("model", "yolo26x-pose.pt"))
     requested_device = body.get("device", "auto")
     detection_mode = body.get("detection_mode", "standard")
-    if detection_mode not in ("standard", "distant", "person_zoom"):
+    if detection_mode not in ("standard", "distant", "person_zoom", "person_zoom_fast"):
         return jsonify({"error": "Unknown detection method"}), 400
     if requested_device not in ("auto", "cpu", "cuda"):
         return jsonify({"error": "Device must be auto, cpu or cuda"}), 400
@@ -412,9 +576,10 @@ def predict(filename: str):
                 return jsonify({"error": str(exc)}), 503
             # Separate cached models prevent a CPU/GPU switch from reusing a predictor on the wrong device.
             model = load_yolo_model(model_name, device)
-            if detection_mode == "person_zoom":
+            if detection_mode in ("person_zoom", "person_zoom_fast"):
                 detector = load_yolo_model("yolo26s.pt", device)
-                prediction = predict_person_zoom(detector, model, path, device, min_conf, min_point_conf)
+                prediction = predict_person_zoom(detector, model, path, device, min_conf, min_point_conf,
+                                                 fast=detection_mode == "person_zoom_fast")
                 return jsonify({**prediction, "model": model_name, "detector": "yolo26s.pt",
                                 "device": device, "detection_mode": detection_mode})
             if detection_mode == "distant":

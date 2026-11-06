@@ -18,6 +18,7 @@ const TEMPLATE = [
 const S = {
   frames: [], folder: '', mode: '', index: -1,
   people: [], selectedPerson: -1, selectedPoint: 0,
+  copiedPose: null,
   width: 0, height: 0, dirty: false, revision: 0,
   navigating: false, pendingIndex: null, busy: false,
   batch: false, batchStop: false,
@@ -67,6 +68,8 @@ function updateButtons() {
   for(const id of ['newProjectBtn','openFolderSmall','modelSelect','pointThreshold','deviceSelect','detectionMode','personThreshold']) el(id).disabled=S.busy;
   document.querySelector('.right-scroll').inert=S.batch;
   for (const id of ['saveBtn','addPersonBtn','inspectorAddBtn','autoBtn','zoomIn','zoomOut','zoomReset']) el(id).disabled=!has || S.busy || S.importing;
+  el('copyPoseBtn').disabled=!has || !selectedPerson() || S.busy || S.importing;
+  el('pastePoseBtn').disabled=!has || !S.copiedPose || S.busy || S.importing;
   for (const id of ['prevBtn','footPrev']) el(id).disabled=!has || S.index===0 || S.busy;
   for (const id of ['nextBtn','footNext']) el(id).disabled=!has || S.index>=S.frames.length-1 || S.busy;
   el('deletePersonBtn').disabled=!selectedPerson() || S.busy;
@@ -160,7 +163,7 @@ async function loadProject() {
 }
 async function adoptProject(result) {
   S.frames=result.frames||[]; S.folder=result.folder||''; S.mode=result.mode||'';
-  S.index=-1;S.people=[];S.selectedPerson=-1;S.selectedPoint=0;S.dirty=false;S.revision=0;S.undo=[];S.redo=[];S.pendingIndex=null;
+  S.index=-1;S.people=[];S.selectedPerson=-1;S.selectedPoint=0;S.copiedPose=null;S.dirty=false;S.revision=0;S.undo=[];S.redo=[];S.pendingIndex=null;
   renderFrameList();renderHeader();renderPeople();renderOverlay();showSaveStatus();
   if (S.frames.length) await navigateTo(0);
   else openModal();
@@ -257,6 +260,30 @@ function createSkeleton() {
   S.selectedPerson=S.people.length-1;S.selectedPoint=0;S.placeMode=false;
   setDirty();renderPeople();renderOverlay();renderHeader();
   toast('Manual skeleton created. Drag its joints onto the person.');
+}
+function copySelectedPose() {
+  const person=selectedPerson();
+  if(!person||S.busy)return;
+  S.copiedPose={keypoints:deep(person.keypoints),width:S.width,height:S.height,...(person.manual_confidence?{manual_confidence:deep(person.manual_confidence)}:{})};
+  updateButtons();
+  toast('Pose copied. Navigate to another frame and paste it.');
+}
+function pasteCopiedPose() {
+  if(!S.copiedPose||S.index<0||S.busy)return;
+  snapshotUndo();
+  const scaleX=S.width/(S.copiedPose.width||S.width),scaleY=S.height/(S.copiedPose.height||S.height);
+  const points=S.copiedPose.keypoints.map(([x,y,v])=>v?[+(x*scaleX).toFixed(2),+(y*scaleY).toFixed(2),v]:[0,0,0]);
+  let target=selectedPerson();
+  if(!target){
+    target={id:S.people.length+1,source:'manual',keypoints:points};
+    S.people.push(target);S.selectedPerson=S.people.length-1;
+  }else{
+    target.keypoints=points;target.source='manual';delete target.model_confidence;
+  }
+  if(S.copiedPose.manual_confidence)target.manual_confidence=deep(S.copiedPose.manual_confidence);
+  else delete target.manual_confidence;
+  S.selectedPoint=0;S.placeMode=false;setDirty();renderPeople();renderOverlay();renderHeader();
+  toast('Pose pasted. Adjust it for this frame, then save.');
 }
 function removeSelectedPerson() {
   if(!selectedPerson()||S.busy)return;
@@ -422,6 +449,7 @@ function predictionSettings() {
     keypoint_confidence:Number(el('pointThreshold').value)};
 }
 function predictionHint(mode) {
+  if(mode==='person_zoom_fast')return 'Checking the full frame first. Searching tiles only if no usable pose is found.';
   if(mode==='person_zoom')return 'Detecting people and estimating joints in enlarged crops. The first run may download detector weights.';
   if(mode==='distant')return 'Scanning enlarged crops. Each frame can take a minute or more on CPU.';
   return 'First use may download the model weights.';
@@ -521,6 +549,27 @@ async function uploadFolder(files) {
     S.importing=false;el('importProgress').classList.add('hidden');updateButtons();
   }
 }
+async function uploadZip(file) {
+  if(S.importing || !file)return;
+  el('zipInput').value='';
+  if(file.size>=250*1024*1024){importError(new Error('Choose a ZIP under 250 MiB.'));return;}
+  if(!confirmReplace())return;
+  S.importing=true;
+  el('zipInput').disabled=true;
+  el('zipStatus').textContent='Uploading and unpacking '+file.name+'…';
+  el('importError').classList.add('hidden');
+  try{
+    if(S.dirty)await saveFrame();
+    const form=new FormData();form.append('archive',file);
+    const result=await api('/api/import/zip',{method:'POST',body:form});
+    el('importModal').classList.add('hidden');
+    await adoptProject(result);
+    toast(`Imported ${result.count.toLocaleString()} frames from ZIP.`);
+  }catch(e){importError(e);}
+  finally{
+    S.importing=false;el('zipInput').disabled=false;el('zipStatus').textContent='';updateButtons();
+  }
+}
 async function openPath() {
   if(S.importing)return;
   const path=el('pathInput').value.trim();if(!path){importError(new Error('Enter a folder path.'));return}
@@ -536,15 +585,32 @@ async function openPath() {
     S.importing=false;el('loadPathBtn').disabled=false;el('loadPathBtn').textContent='Open this folder →';updateButtons();
   }
 }
+async function uploadAnnotationsCsv(file) {
+  if (!file || S.importing) return;
+  if (!S.frames.length) { importError(new Error('Import an image folder or ZIP before loading keypoints.')); return; }
+  try {
+    if (S.dirty) await saveFrame();
+    S.importing=true; updateButtons(); el('importError').classList.add('hidden');
+    const form=new FormData(); form.append('file',file);
+    const result=await api('/api/import/annotations-csv',{method:'POST',body:form});
+    el('importModal').classList.add('hidden'); await adoptProject(result);
+    toast(`Loaded keypoints for ${result.matched} frame${result.matched===1?'':'s'}${result.unmatched?` · ${result.unmatched} CSV filename${result.unmatched===1?'':'s'} unmatched`:''}.`);
+  } catch(e) { importError(e); toast(`CSV import failed: ${e.message}`,true); }
+  finally { S.importing=false; el('annotationCsvInput').value=''; updateButtons(); }
+}
 function wireEvents() {
   ['newProjectBtn','openFolderSmall','emptyImportBtn'].forEach(id=>el(id).addEventListener('click',openModal));
   el('closeModal').addEventListener('click',closeModal);
   el('importModal').addEventListener('click',evt=>{if(evt.target===el('importModal') && S.frames.length)closeModal()});
   el('pickFolder').addEventListener('click',()=>el('folderInput').click());
+  el('zipInput').addEventListener('change',evt=>uploadZip(evt.target.files[0]));
   el('folderInput').addEventListener('change',evt=>{if(evt.target.files?.length)uploadFolder(evt.target.files)});
   el('loadPathBtn').addEventListener('click',openPath);
+  el('annotationCsvInput').addEventListener('change',evt=>uploadAnnotationsCsv(evt.target.files?.[0]));
   el('pathInput').addEventListener('keydown',evt=>{if(evt.key==='Enter')openPath()});
   document.querySelectorAll('.modal-tabs button').forEach(b=>b.addEventListener('click',()=>{
+    if(S.importing)return;
+    el('zipPanel').classList.toggle('hidden',b.dataset.tab!=='zip');
     document.querySelectorAll('.modal-tabs button').forEach(x=>x.classList.toggle('active',x===b));
     el('uploadPanel').classList.toggle('hidden',b.dataset.tab!=='upload');
     el('pathPanel').classList.toggle('hidden',b.dataset.tab!=='path');
@@ -568,6 +634,8 @@ function wireEvents() {
   el('saveBtn').addEventListener('click',async()=>{try{await saveFrame(true);toast('Saved annotations to CSV.')}catch(e){toast(e.message,true)}});
   el('exportBtn').addEventListener('click',()=>{window.location.href='/api/export'});
   ['addPersonBtn','inspectorAddBtn'].forEach(id=>el(id).addEventListener('click',createSkeleton));
+  el('copyPoseBtn').addEventListener('click',copySelectedPose);
+  el('pastePoseBtn').addEventListener('click',pasteCopiedPose);
   el('deletePersonBtn').addEventListener('click',removeSelectedPerson);
   el('autoBtn').addEventListener('click',predictPose);
   el('batchAutoBtn').addEventListener('click',runAutomaticLabels);
@@ -635,6 +703,7 @@ function wireEvents() {
     el('personThresholdValue').textContent=Number(el('personThreshold').value).toFixed(2);
     el('detectionHelp').textContent=distant?'Enlarges overlapping crops to find small people. Slower on CPU; review predictions for false detections. Requires 4 confident joints; weak detections need 12 joints and agreement across crops.':'One full-image pass. Faster, but may miss small or distant people.';
     if(el('detectionMode').value==='person_zoom')el('detectionHelp').textContent='Detects people and enlarges each pose crop. If no usable pose is found, smaller tiles search for tiny people. Empty frames may take longer.';
+    if(el('detectionMode').value==='person_zoom_fast')el('detectionHelp').textContent='Stops after the first search scale that finds a pose. Faster on clear frames, but can miss a second, smaller person.';
   });
   el('poseOverlay').addEventListener('pointerdown',mouseDown);
   el('poseOverlay').addEventListener('contextmenu',hidePointOnRightClick);
